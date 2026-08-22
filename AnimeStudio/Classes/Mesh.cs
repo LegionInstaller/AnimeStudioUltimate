@@ -991,13 +991,22 @@ namespace AnimeStudio
                                     }
                                     for (int i = 0; i < m_VertexCount; i++)
                                     {
+                                        var weightSum = 0f;
                                         for (int j = 0; j < m_Channel.dimension; j++)
                                         {
-                                            m_Skin[i].weight[j] = componentsFloatArray[i * m_Channel.dimension + j];
+                                            var w = componentsFloatArray[i * m_Channel.dimension + j];
+                                            m_Skin[i].weight[j] = w;
+                                            weightSum += w;
                                         }
 
-                                        m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
-
+                                        //Some games store less than 4 blend weights per vertex and keep the last
+                                        //one implicit as the remainder. Only reconstruct it into the first unused
+                                        //slot when the stored weights really are incomplete - weights that already
+                                        //add up to 1 (and unskinned vertices) must stay untouched.
+                                        if (m_Channel.dimension < 4 && weightSum > 1e-4f && weightSum < 1f - 1e-4f)
+                                        {
+                                            m_Skin[i].weight[m_Channel.dimension] = 1f - weightSum;
+                                        }
                                     }
                                     break;
                                 case 13: //kShaderChannelBlendIndices
@@ -1012,7 +1021,14 @@ namespace AnimeStudio
                                             m_Skin[i].boneIndex[j] = componentsIntArray[i * m_Channel.dimension + j];
                                         }
 
-                                        m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
+                                        //Rigidly bound meshes ship BlendIndices without a BlendWeight channel at all,
+                                        //so nothing has written a weight for this vertex. Bind it fully to its first
+                                        //bone. Channels are read in ascending order, so any real weights from
+                                        //kShaderChannelBlendWeight above are already in place and left alone.
+                                        if (m_Skin[i].weight.Sum() <= 0f)
+                                        {
+                                            m_Skin[i].weight[0] = 1f;
+                                        }
                                     }
                                     break;
                             }

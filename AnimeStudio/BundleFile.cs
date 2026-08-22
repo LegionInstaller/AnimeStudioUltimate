@@ -115,6 +115,10 @@ namespace AnimeStudio
         public Header m_Header;
         private List<Node> m_DirectoryInfo;
         private List<StorageBlock> m_BlocksInfo;
+        // Bytes actually written into the blocks stream. CreateBlocksStream hands out a
+        // fixed-length buffer over uninitialized memory, so anything past this point is
+        // garbage rather than EOF and must not be handed to a CAB reader.
+        private long blocksDataLength;
 
         public List<StreamFile> fileList;
         
@@ -304,6 +308,7 @@ namespace AnimeStudio
                 }
                 blocksStream.Write(uncompressedBytes, 0, uncompressedBytes.Length);
             }
+            blocksDataLength = blocksStream.Position;
             blocksStream.Position = 0;
             var blocksReader = new EndianBinaryReader(blocksStream);
             var nodesCount = blocksReader.ReadInt32();
@@ -330,10 +335,17 @@ namespace AnimeStudio
             bool hasShared = blocksStream is MemoryStream memoryStream
                              && memoryStream.TryGetBuffer(out shared)
                              && shared.Array != null;
+            // The shared buffer is allocated uninitialized for the full declared block sum,
+            // so its length says nothing about how much real data was written.
+            var available = blocksDataLength > 0 ? blocksDataLength : blocksStream.Length;
 
             for (int i = 0; i < m_DirectoryInfo.Count; i++)
             {
                 var node = m_DirectoryInfo[i];
+                if (node.offset < 0 || node.size < 0 || node.offset + node.size > available)
+                {
+                    throw new InvalidDataException($"Node '{node.path}' at offset 0x{node.offset:X} with size 0x{node.size:X} lies outside the {available} bytes of decompressed block data");
+                }
                 var file = new StreamFile();
                 fileList.Add(file);
                 file.path = node.path;
@@ -909,6 +921,7 @@ namespace AnimeStudio
                 }
             }
             ArrayPool<byte>.Shared.Return(firstBlockBytes, true);
+            blocksDataLength = blocksStream.Position;
             blocksStream.Position = 0;
         }
 

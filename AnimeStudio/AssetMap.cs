@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using MessagePack;
+using MessagePack.Formatters;
+using Newtonsoft.Json;
 
 namespace AnimeStudio
 {
@@ -42,7 +44,13 @@ namespace AnimeStudio
         public List<AssetEntry> AssetEntries { get; set; }
     }
 
+    /// <summary>
+    /// Entries are written as a 7 element MessagePack array (keys 0-6). Older maps built by
+    /// the acl_fix branch only carry 6 elements (no <see cref="Offset"/>); <see cref="AssetEntryFormatter"/>
+    /// reads both and always writes 7, so both map generations stay loadable.
+    /// </summary>
     [MessagePackObject]
+    [MessagePackFormatter(typeof(AssetEntryFormatter))]
     public partial record AssetEntry
     {
         private string _container;
@@ -77,12 +85,29 @@ namespace AnimeStudio
         public ClassIDType Type { get; set; }
 
         // Hash is effectively unique per asset — interning it only grows the cache without reuse.
+        // Opaque string: XXH64 hex (or "size:<hex>") in maps built here, SHA-256 hex in maps
+        // built by the acl_fix branch. Never converted, only compared.
         [Key(5)]
         public string Hash {
             get => _hash;
             set => _hash = value;
         }
 
+        /// <summary>
+        /// Read-only alias so a .json map written by the acl_fix branch (field name "SHA256Hash")
+        /// deserializes into <see cref="Hash"/>. Not written back out.
+        /// </summary>
+        [IgnoreMember]
+        [JsonProperty("SHA256Hash")]
+        public string SHA256Hash {
+            get => _hash;
+            set => _hash ??= value;
+        }
+
+        public bool ShouldSerializeSHA256Hash() => false;
+
+        // -1 means "unknown" (map predates this field) and makes AssetsManager fall back to
+        // the CABMap offsets. Must never default to 0 — that would silently read the wrong bundle.
         [Key(6)]
         public long Offset { get; set; } = -1;
 
@@ -113,6 +138,60 @@ namespace AnimeStudio
                     return false;
             }
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Explicit MessagePack formatter for <see cref="AssetEntry"/>.
+    /// Reads both the legacy 6 element array (acl_fix branch, no Offset) and the current
+    /// 7 element array, and always writes 7 elements. A missing key 6 yields
+    /// <c>Offset = -1</c>, which is what <c>AssetsManager</c> checks (<c>item.Offset &gt;= 0</c>)
+    /// before falling back to the CABMap offsets — 0 would be taken as a real offset.
+    /// </summary>
+    public sealed class AssetEntryFormatter : IMessagePackFormatter<AssetEntry>
+    {
+        public AssetEntry Deserialize(ref MessagePackReader reader, MessagePackSerializerOptions options)
+        {
+            if (reader.TryReadNil())
+                return null;
+
+            options.Security.DepthStep(ref reader);
+            var count = reader.ReadArrayHeader();
+            var entry = new AssetEntry { Offset = -1 };
+            for (var i = 0; i < count; i++)
+            {
+                switch (i)
+                {
+                    case 0: entry.Name = reader.ReadString(); break;
+                    case 1: entry.Container = reader.ReadString(); break;
+                    case 2: entry.Source = reader.ReadString(); break;
+                    case 3: entry.PathID = reader.ReadInt64(); break;
+                    case 4: entry.Type = (ClassIDType)reader.ReadInt32(); break;
+                    case 5: entry.Hash = reader.ReadString(); break;
+                    case 6: entry.Offset = reader.ReadInt64(); break;
+                    default: reader.Skip(); break;
+                }
+            }
+            reader.Depth--;
+            return entry;
+        }
+
+        public void Serialize(ref MessagePackWriter writer, AssetEntry value, MessagePackSerializerOptions options)
+        {
+            if (value is null)
+            {
+                writer.WriteNil();
+                return;
+            }
+
+            writer.WriteArrayHeader(7);
+            writer.Write(value.Name);
+            writer.Write(value.Container);
+            writer.Write(value.Source);
+            writer.Write(value.PathID);
+            writer.Write((int)value.Type);
+            writer.Write(value.Hash);
+            writer.Write(value.Offset);
         }
     }
 }

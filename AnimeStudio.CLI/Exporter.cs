@@ -72,6 +72,13 @@ namespace AnimeStudio.CLI
                 return false;
             var m_Shader = (Shader)item.Asset;
             var str = m_Shader.Convert();
+            if (str == null)
+            {
+                // ShaderConverter returns null for shaders it cannot decompile (e.g. SR platform
+                // infos). Writing that out would leave an empty .shader file behind.
+                Logger.Warning($"Unable to convert shader {item.Text}, skipping.");
+                return false;
+            }
             File.WriteAllText(exportFullPath, str);
             return true;
         }

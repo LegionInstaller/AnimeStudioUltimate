@@ -29,6 +29,7 @@
 #include "rtm/math.h"
 #include "rtm/matrix3x3f.h"
 #include "rtm/quatf.h"
+#include "rtm/qvsf.h"
 #include "rtm/vector4f.h"
 #include "rtm/version.h"
 #include "rtm/impl/compiler_utils.h"
@@ -46,7 +47,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE matrix3x4f RTM_SIMD_CALL matrix_from_rotation(matrix3x3f_arg0 rotation) RTM_NO_EXCEPT
 	{
-		return matrix3x4f{ rotation.x_axis, rotation.y_axis, rotation.z_axis, vector_zero() };
+		return matrix3x4f{ rotation.x_axis, rotation.y_axis, rotation.z_axis, (vector4f)vector_zero() };
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -55,6 +56,76 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE matrix3x4f RTM_SIMD_CALL matrix_from_translation(vector4f_arg0 translation) RTM_NO_EXCEPT
 	{
 		return matrix3x4f{ vector_set(1.0F, 0.0F, 0.0F, 0.0F), vector_set(0.0F, 1.0F, 0.0F, 0.0F), vector_set(0.0F, 0.0F, 1.0F, 0.0F), translation };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets a 3x4 affine matrix from a rotation quaternion and translation.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_from_qv(quatf_arg0 quat, vector4f_arg1 translation) RTM_NO_EXCEPT
+	{
+		RTM_ASSERT(quat_is_normalized(quat), "Quaternion is not normalized");
+
+		const float x2 = quat_get_x(quat) + quat_get_x(quat);
+		const float y2 = quat_get_y(quat) + quat_get_y(quat);
+		const float z2 = quat_get_z(quat) + quat_get_z(quat);
+		const float xx = quat_get_x(quat) * x2;
+		const float xy = quat_get_x(quat) * y2;
+		const float xz = quat_get_x(quat) * z2;
+		const float yy = quat_get_y(quat) * y2;
+		const float yz = quat_get_y(quat) * z2;
+		const float zz = quat_get_z(quat) * z2;
+		const float wx = quat_get_w(quat) * x2;
+		const float wy = quat_get_w(quat) * y2;
+		const float wz = quat_get_w(quat) * z2;
+
+		const vector4f x_axis = vector_set(1.0F - (yy + zz), xy + wz, xz - wy, 0.0F);
+		const vector4f y_axis = vector_set(xy - wz, 1.0F - (xx + zz), yz + wx, 0.0F);
+		const vector4f z_axis = vector_set(xz + wy, yz - wx, 1.0F - (xx + yy), 0.0F);
+		return matrix3x4f{ x_axis, y_axis, z_axis, translation };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Converts a QV transform into a 3x4 affine matrix.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_from_qv(qvf_arg0 transform) RTM_NO_EXCEPT
+	{
+		return matrix_from_qv(transform.rotation, transform.translation);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets a 3x4 affine matrix from a rotation quaternion, translation, and scalar scale.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_from_qvs(quatf_arg0 quat, vector4f_arg1 translation, float scale) RTM_NO_EXCEPT
+	{
+		RTM_ASSERT(quat_is_normalized(quat), "Quaternion is not normalized");
+
+		const float x2 = quat_get_x(quat) + quat_get_x(quat);
+		const float y2 = quat_get_y(quat) + quat_get_y(quat);
+		const float z2 = quat_get_z(quat) + quat_get_z(quat);
+		const float xx = quat_get_x(quat) * x2;
+		const float xy = quat_get_x(quat) * y2;
+		const float xz = quat_get_x(quat) * z2;
+		const float yy = quat_get_y(quat) * y2;
+		const float yz = quat_get_y(quat) * z2;
+		const float zz = quat_get_z(quat) * z2;
+		const float wx = quat_get_w(quat) * x2;
+		const float wy = quat_get_w(quat) * y2;
+		const float wz = quat_get_w(quat) * z2;
+
+		const scalarf scale_s = scalar_set(scale);
+
+		const vector4f x_axis = vector_mul(vector_set(1.0F - (yy + zz), xy + wz, xz - wy, 0.0F), scale_s);
+		const vector4f y_axis = vector_mul(vector_set(xy - wz, 1.0F - (xx + zz), yz + wx, 0.0F), scale_s);
+		const vector4f z_axis = vector_mul(vector_set(xz + wy, yz - wx, 1.0F - (xx + yy), 0.0F), scale_s);
+		return matrix3x4f{ x_axis, y_axis, z_axis, translation };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Converts a QVS transform into a 3x4 affine matrix.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_from_qvs(qvsf_arg0 transform) RTM_NO_EXCEPT
+	{
+		return matrix_from_qvs(transform.rotation, transform.translation_scale, qvs_get_scale(transform));
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -77,9 +148,9 @@ namespace rtm
 		const float wy = quat_get_w(quat) * y2;
 		const float wz = quat_get_w(quat) * z2;
 
-		const scalarf scale_x = vector_get_x(scale);
-		const scalarf scale_y = vector_get_y(scale);
-		const scalarf scale_z = vector_get_z(scale);
+		const scalarf scale_x = vector_get_x_as_scalar(scale);
+		const scalarf scale_y = vector_get_y_as_scalar(scale);
+		const scalarf scale_z = vector_get_z_as_scalar(scale);
 
 		const vector4f x_axis = vector_mul(vector_set(1.0F - (yy + zz), xy + wz, xz - wy, 0.0F), scale_x);
 		const vector4f y_axis = vector_mul(vector_set(xy - wz, 1.0F - (xx + zz), yz + wx, 0.0F), scale_y);
@@ -96,12 +167,121 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns the axis pointing in the forward direction of the default coordinate system (Z+).
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr vector4f RTM_SIMD_CALL matrix_get_coord_forward(matrix3x4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return input.z_axis;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the axis pointing in the up direction of the default coordinate system (Y+).
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr vector4f RTM_SIMD_CALL matrix_get_coord_up(matrix3x4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return input.y_axis;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the axis pointing in the cross direction of the default coordinate system (X+).
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr vector4f RTM_SIMD_CALL matrix_get_coord_cross(matrix3x4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return input.x_axis;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the axis holding the position of the default coordinate system (W+).
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr vector4f RTM_SIMD_CALL matrix_get_coord_position(matrix3x4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return input.w_axis;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the desired 3x4 affine matrix axis.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr const vector4f& matrix_get_axis(const matrix3x4f& input, axis4 axis) RTM_NO_EXCEPT
 	{
 		return axis == axis4::x ? input.x_axis : (axis == axis4::y ? input.y_axis : (axis == axis4::z ? input.z_axis : input.w_axis));
 	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a new 3x4 matrix where the specified axis has been replaced on the input matrix.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_set_axis(matrix3x4f_arg0 input, vector4f_arg5 axis_value, axis4 axis) RTM_NO_EXCEPT
+	{
+		switch (axis)
+		{
+			default:
+			case axis4::x:	return matrix3x4f{ axis_value, input.y_axis, input.z_axis, input.w_axis };
+			case axis4::y:	return matrix3x4f{ input.x_axis, axis_value, input.z_axis, input.w_axis };
+			case axis4::z:	return matrix3x4f{ input.x_axis, input.y_axis, axis_value, input.w_axis };
+			case axis4::w:	return matrix3x4f{ input.x_axis, input.y_axis, input.z_axis, axis_value };
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the desired 3x4 matrix component from the specified axis.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline rtm_impl::vector4f_vector_get_component RTM_SIMD_CALL matrix_get_component(matrix3x4f_arg0 input, axis4 axis, component3 component) RTM_NO_EXCEPT
+	{
+		switch (axis)
+		{
+			default:
+			case axis4::x:	return vector_get_component3(input.x_axis, component);
+			case axis4::y:	return vector_get_component3(input.y_axis, component);
+			case axis4::z:	return vector_get_component3(input.z_axis, component);
+			case axis4::w:	return vector_get_component3(input.w_axis, component);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the desired 3x4 matrix component from the specified axis.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline scalarf RTM_SIMD_CALL matrix_get_component_as_scalar(matrix3x4f_arg0 input, axis4 axis, component3 component) RTM_NO_EXCEPT
+	{
+		switch (axis)
+		{
+			default:
+			case axis4::x:	return vector_get_component3_as_scalar(input.x_axis, component);
+			case axis4::y:	return vector_get_component3_as_scalar(input.y_axis, component);
+			case axis4::z:	return vector_get_component3_as_scalar(input.z_axis, component);
+			case axis4::w:	return vector_get_component3_as_scalar(input.w_axis, component);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a new 3x4 matrix where the specified axis/component has been replaced on the input matrix.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_set_component(matrix3x4f_arg0 input, float component_value, axis4 axis, component3 component) RTM_NO_EXCEPT
+	{
+		switch (axis)
+		{
+			default:
+			case axis4::x:	return matrix3x4f{ vector_set_component3(input.x_axis, component_value, component), input.y_axis, input.z_axis, input.w_axis };
+			case axis4::y:	return matrix3x4f{ input.x_axis, vector_set_component3(input.y_axis, component_value, component), input.z_axis, input.w_axis };
+			case axis4::z:	return matrix3x4f{ input.x_axis, input.y_axis, vector_set_component3(input.z_axis, component_value, component), input.w_axis };
+			case axis4::w:	return matrix3x4f{ input.x_axis, input.y_axis, input.z_axis, vector_set_component3(input.w_axis, component_value, component) };
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a new 3x4 matrix where the specified axis/component has been replaced on the input matrix.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK inline matrix3x4f RTM_SIMD_CALL matrix_set_component(matrix3x4f_arg0 input, scalarf_arg4 component_value, axis4 axis, component3 component) RTM_NO_EXCEPT
+	{
+		switch (axis)
+		{
+			default:
+			case axis4::x:	return matrix3x4f{ vector_set_component3(input.x_axis, component_value, component), input.y_axis, input.z_axis, input.w_axis };
+			case axis4::y:	return matrix3x4f{ input.x_axis, vector_set_component3(input.y_axis, component_value, component), input.z_axis, input.w_axis };
+			case axis4::z:	return matrix3x4f{ input.x_axis, input.y_axis, vector_set_component3(input.z_axis, component_value, component), input.w_axis };
+			case axis4::w:	return matrix3x4f{ input.x_axis, input.y_axis, input.z_axis, vector_set_component3(input.w_axis, component_value, component) };
+		}
+	}
+#endif
 
 	//////////////////////////////////////////////////////////////////////////
 	// Converts a 3x4 affine matrix into a rotation quaternion.
@@ -237,7 +417,7 @@ namespace rtm
 		const vector4f o00_o00_o10_o10 = vector_mix<mix4::x, mix4::x, mix4::a, mix4::a>(x_axis, y_axis);
 		const vector4f o00_o10_o20 = vector_mix<mix4::x, mix4::z, mix4::a, mix4::a>(o00_o00_o10_o10, z_axis);
 
-		const scalarf det = vector_dot3(o00_o10_o20, input.x_axis);
+		const scalarf det = vector_dot3_as_scalar(o00_o10_o20, input.x_axis);
 		const scalarf inv_det_s = scalar_reciprocal(det);
 		const vector4f inv_det = vector_set(inv_det_s);
 
@@ -300,7 +480,7 @@ namespace rtm
 		const vector4f o00_o00_o10_o10 = vector_mix<mix4::x, mix4::x, mix4::a, mix4::a>(x_axis, y_axis);
 		const vector4f o00_o10_o20 = vector_mix<mix4::x, mix4::z, mix4::a, mix4::a>(o00_o00_o10_o10, z_axis);
 
-		const scalarf det = vector_dot3(o00_o10_o20, input.x_axis);
+		const scalarf det = vector_dot3_as_scalar(o00_o10_o20, input.x_axis);
 		if (scalar_cast(scalar_abs(det)) < threshold)
 			return fallback;
 
@@ -363,7 +543,7 @@ namespace rtm
 		const vector4f o00_o00_o10_o10 = vector_mix<mix4::x, mix4::x, mix4::a, mix4::a>(x_axis, y_axis);
 		const vector4f o00_o10_o20 = vector_mix<mix4::x, mix4::z, mix4::a, mix4::a>(o00_o00_o10_o10, z_axis);
 
-		return vector_dot3(o00_o10_o20, input.x_axis);
+		return vector_dot3_as_scalar(o00_o10_o20, input.x_axis);
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -414,11 +594,11 @@ namespace rtm
 
 		// Extract the one we need
 		if (column == axis3::x)
-			return vector_get_z(determinants);
+			return vector_get_z_as_scalar(determinants);
 		else if (column == axis3::y)
-			return vector_get_y(determinants);
+			return vector_get_y_as_scalar(determinants);
 		else
-			return vector_get_x(determinants);
+			return vector_get_x_as_scalar(determinants);
 	}
 
 	//////////////////////////////////////////////////////////////////////////

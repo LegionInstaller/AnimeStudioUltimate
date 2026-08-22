@@ -19,12 +19,23 @@ namespace AnimeStudio
     {
         public const string MapName = "Maps";
 
+        // Optional CABMap header, written since V2: 0xFF 'C' 'A' 'B' 'M' 'A' 'P' + ushort version.
+        // V1 files have no header and start straight with BinaryWriter's 7-bit length prefix of
+        // BaseFolder. That prefix can begin with 0xFF (only when BaseFolder is 128+ bytes long),
+        // so the *whole* magic is matched before assuming V2: the byte after a 0xFF length prefix
+        // is always a varint continuation whose value would have to make BaseFolder 8703 bytes
+        // long to spell "CABMAP". Non-matching files are rewound and read as V1.
+        private static readonly byte[] CABMapMagic = { 0xFF, (byte)'C', (byte)'A', (byte)'B', (byte)'M', (byte)'A', (byte)'P' };
+        private const ushort CABMapVersion = 2;
+
         public static bool Minimal = true;
         public static CancellationTokenSource tokenSource = new CancellationTokenSource();
 
         private static string BaseFolder = "";
         private static Dictionary<string, Entry> CABMap = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
-        private static Dictionary<string, HashSet<long>> Offsets = new Dictionary<string, HashSet<long>>();
+        // Keyed by file path — case-insensitive like CABMap, so a path that differs only in
+        // casing cannot end up as two entries (which would load a file with a partial offset set).
+        private static Dictionary<string, HashSet<long>> Offsets = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
         private static AssetsManager assetsManager = new AssetsManager() { Silent = true, SkipProcess = true, ResolveDependencies = false };
 
         public static Dictionary<ulong, string> Paths { get; set; } = new Dictionary<ulong, string>();
@@ -270,8 +281,12 @@ namespace AnimeStudio
                     Dependencies = assetsFile.m_Externals.Select(x => x.fileName).ToList()
                 };
 
-                if (CABMap.ContainsKey(assetsFile.fileName))
+                if (CABMap.TryGetValue(assetsFile.fileName, out var existing))
                 {
+                    // Same CAB name in more than one container. First one wins; the discarded
+                    // location was silent before, which made a missing dependency impossible to
+                    // trace back to the map build.
+                    Logger.Verbose($"CAB collision: {assetsFile.fileName} already mapped to {existing.Path}, discarding copy in {entry.Path}");
                     collision++;
                     continue;
                 }
@@ -286,9 +301,12 @@ namespace AnimeStudio
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputFile));
 
-            using (var binaryFile = File.OpenWrite(outputFile))
+            // File.Create (not File.OpenWrite) so a smaller map fully replaces a larger old file.
+            using (var binaryFile = File.Create(outputFile))
             using (var writer = new BinaryWriter(binaryFile))
             {
+                writer.Write(CABMapMagic);
+                writer.Write(CABMapVersion);
                 writer.Write(BaseFolder);
                 writer.Write(CABMap.Count);
                 foreach (var kv in CABMap)
@@ -348,17 +366,72 @@ namespace AnimeStudio
             return true;
         }
 
+        /// <summary>
+        /// Returns 2 (or higher) when the stream carries a <see cref="CABMapMagic"/> header and
+        /// leaves the stream positioned right after it. Otherwise rewinds and returns 1 (legacy,
+        /// headerless format) so CABMaps built by older versions keep loading unchanged.
+        /// </summary>
+        private static ushort ReadCABMapVersion(BinaryReader reader)
+        {
+            var stream = reader.BaseStream;
+            var start = stream.Position;
+            if (stream.Length - start < CABMapMagic.Length + sizeof(ushort))
+            {
+                return 1;
+            }
+
+            var magic = reader.ReadBytes(CABMapMagic.Length);
+            if (magic.Length == CABMapMagic.Length && magic.AsSpan().SequenceEqual(CABMapMagic))
+            {
+                return reader.ReadUInt16();
+            }
+
+            stream.Position = start;
+            return 1;
+        }
+
+        /// <summary>
+        /// Guards a count read from the file against corruption before it is used to size an
+        /// array/list: negative values would throw a bare OverflowException, absurdly large ones
+        /// would allocate gigabytes before failing with an unhelpful EndOfStreamException.
+        /// </summary>
+        private static void ValidateCABMapCount(BinaryReader reader, string what, int count, int minBytesPerItem)
+        {
+            var position = reader.BaseStream.Position - sizeof(int);
+            if (count < 0)
+            {
+                throw new InvalidDataException($"Corrupt CABMap: {what} {count} at offset {position} is negative.");
+            }
+
+            var remaining = reader.BaseStream.Length - reader.BaseStream.Position;
+            if ((long)count * minBytesPerItem > remaining)
+            {
+                throw new InvalidDataException($"Corrupt CABMap: {what} {count} at offset {position} needs at least {(long)count * minBytesPerItem} bytes but only {remaining} remain.");
+            }
+        }
+
         private static void ParseCABMap(BinaryReader reader)
         {
+            var version = ReadCABMapVersion(reader);
+            if (version > CABMapVersion)
+            {
+                throw new NotSupportedException($"CABMap version {version} is newer than the supported version {CABMapVersion}.");
+            }
+            Logger.Verbose($"CABMap format version {version}");
+
             BaseFolder = reader.ReadString();
             var count = reader.ReadInt32();
+            // Smallest possible entry: 1 byte cab + 1 byte path (empty strings) + 8 offset + 4 depCount.
+            ValidateCABMapCount(reader, "entry count", count, 14);
             for (int i = 0; i < count; i++)
             {
                 var cab = reader.ReadString();
                 var path = reader.ReadString();
                 var offset = reader.ReadInt64();
                 var depCount = reader.ReadInt32();
-                var dependencies = new List<string>();
+                // Smallest possible dependency: 1 byte length prefix of an empty string.
+                ValidateCABMapCount(reader, "dependency count", depCount, 1);
+                var dependencies = new List<string>(depCount);
                 for (int j = 0; j < depCount; j++)
                 {
                     dependencies.Add(reader.ReadString());
@@ -787,7 +860,20 @@ namespace AnimeStudio
                         var serializer = new JsonSerializer() { Formatting = Newtonsoft.Json.Formatting.Indented };
                         serializer.Converters.Add(new StringEnumConverter());
 
-                        var entries = serializer.Deserialize<List<AssetEntry>>(reader);
+                        // The writer emits { GameType, AssetEntries } (an AssetMap), but this used
+                        // to deserialize a bare array, so JSON maps could be written and never read
+                        // back. Accept both shapes: the object we write, and a plain array.
+                        reader.Read();
+                        List<AssetEntry> entries;
+                        if (reader.TokenType == JsonToken.StartArray)
+                        {
+                            entries = serializer.Deserialize<List<AssetEntry>>(reader) ?? new List<AssetEntry>();
+                        }
+                        else
+                        {
+                            entries = serializer.Deserialize<AssetMap>(reader)?.AssetEntries ?? new List<AssetEntry>();
+                        }
+
                         foreach (var entry in entries)
                         {
                             var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(entry.Name));

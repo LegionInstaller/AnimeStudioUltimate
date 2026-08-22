@@ -28,6 +28,7 @@
 #include "acl/core/bitset.h"
 #include "acl/core/compressed_tracks.h"
 #include "acl/core/compressed_tracks_version.h"
+#include "acl/core/interpolation_utils.h"
 #include "acl/core/range_reduction_types.h"
 #include "acl/core/track_formats.h"
 #include "acl/core/impl/compiler_utils.h"
@@ -52,50 +53,52 @@ namespace acl
 	{
 		struct persistent_transform_decompression_context_v0
 		{
-			// Clip related data								//   offsets
+			// Clip related data												//   offsets
 			// Only member used to detect if we are initialized, must be first
-			const compressed_tracks* tracks;					//   0 |   0
+			const compressed_tracks* tracks = nullptr;							//   0 |   0
 
 			// Database context, optional
-			const database_context_v0* db;						//   4 |   8
+			const database_context_v0* db = nullptr;							//   4 |   8
 
-			uint32_t clip_hash;									//   8 |  16
+			// Cached hashes of the bound compressed track and database instances
+			uint32_t tracks_hash = 0;											//   8 |  16
+			uint32_t db_hash = 0;												//  12 |  20
 
 			// Only used when the wrap loop policy isn't supported
-			float clip_duration;								//  12 |  20
+			float clip_duration = 0.0F;											//  16 |  24
 
-			rotation_format8 rotation_format;					//  16 |  24
-			vector_format8 translation_format;					//  17 |  25
-			vector_format8 scale_format;						//  18 |  26
+			rotation_format8 rotation_format = rotation_format8::quatf_full;	//  20 |  28
+			vector_format8 translation_format = vector_format8::vector3f_full;	//  21 |  29
+			vector_format8 scale_format = vector_format8::vector3f_full;		//  22 |  30
 
-			uint8_t has_scale;									//  19 |  27
-			uint8_t has_segments;								//  20 |  28
+			uint8_t has_scale = 0;												//  23 |  31
+			uint8_t has_segments = 0;											//  24 |  32
 
-			uint8_t looping_policy;								//  21 |  29
+			uint8_t looping_policy = 0;											//  25 |  33
 
-			uint8_t padding0[20];								//  22 |  30
+			uint8_t padding0[16] = { 0 };										//  26 |  34
 
 			// Seeking related data
-			uint8_t rounding_policy;							//  42 |  50
-			uint8_t uses_single_segment;						//  43 |  51
+			uint8_t rounding_policy = 0;										//  42 |  50
+			uint8_t uses_single_segment = 0;									//  43 |  51
 
-			float sample_time;									//  44 |  52
+			float sample_time = 0.0F;											//  44 |  52
 
-			// Offsets relative to the 'tracks' pointer
-			ptr_offset32<segment_header> segment_offsets[2];	//  48 |  56
+			// Offsets in bytes relative to the 'tracks' pointer
+			ptr_offset32<segment_header> segment_offsets[2];					//  48 |  56
 
-			const uint8_t* format_per_track_data[2];			//  56 |  64
-			const uint8_t* segment_range_data[2];				//  64 |  80
-			const uint8_t* animated_track_data[2];				//  72 |  96
+			const uint8_t* format_per_track_data[2] = { nullptr };				//  56 |  64
+			const uint8_t* segment_range_data[2] = { nullptr };					//  64 |  80
+			const uint8_t* animated_track_data[2] = { nullptr };				//  72 |  96
 
-			// Offsets relative to the 'animated_track_data' pointers
-			uint32_t key_frame_bit_offsets[2];					//  80 | 112
+			// Offsets in bits relative to the 'animated_track_data' pointers
+			uint32_t key_frame_bit_offsets[2] = { 0 };							//  80 | 112
 
-			float interpolation_alpha;							//  88 | 120
+			float interpolation_alpha = 0.0F;									//  88 | 120
 
-			uint8_t padding1[sizeof(void*) == 4 ? 36 : 4];		//  92 | 124
+			uint8_t padding1[sizeof(void*) == 4 ? 36 : 4] = { 0 };				//  92 | 124
 
-			//										Total size:	   128 | 128
+			//														Total size:	   128 | 128
 
 			//////////////////////////////////////////////////////////////////////////
 
@@ -104,10 +107,15 @@ namespace acl
 			sample_looping_policy get_looping_policy() const { return static_cast<sample_looping_policy>(looping_policy); }
 			sample_rounding_policy get_rounding_policy() const { return static_cast<sample_rounding_policy>(rounding_policy); }
 			bool is_initialized() const { return tracks != nullptr; }
-			void reset() { tracks = nullptr; }
+			void reset()
+			{
+				// Just reset the tracks pointer, this will mark us as no longer initialized indicating everything is stale
+				tracks = nullptr;
+			}
 		};
 
 		static_assert(sizeof(persistent_transform_decompression_context_v0) == 128, "Unexpected size");
+		static_assert(offsetof(persistent_transform_decompression_context_v0, tracks) == 0, "tracks pointer needs to be the first member");
 
 		// We use adapters to wrap the decompression_settings
 		// This allows us to re-use the code for skipping and decompressing Vector3 samples
@@ -120,6 +128,7 @@ namespace acl
 			static constexpr vector_format8 get_vector_format(const persistent_transform_decompression_context_v0& context) { return context.translation_format; }
 			static constexpr bool is_vector_format_supported(vector_format8 format) { return decompression_settings_type::is_translation_format_supported(format); }
 			static constexpr bool is_per_track_rounding_supported() { return decompression_settings_type::is_per_track_rounding_supported(); }
+			static constexpr compressed_tracks_version16 version_supported() { return decompression_settings_type::version_supported(); }
 		};
 
 		template<class decompression_settings_type>
@@ -130,6 +139,7 @@ namespace acl
 			static constexpr vector_format8 get_vector_format(const persistent_transform_decompression_context_v0& context) { return context.scale_format; }
 			static constexpr bool is_vector_format_supported(vector_format8 format) { return decompression_settings_type::is_scale_format_supported(format); }
 			static constexpr bool is_per_track_rounding_supported() { return decompression_settings_type::is_per_track_rounding_supported(); }
+			static constexpr compressed_tracks_version16 version_supported() { return decompression_settings_type::version_supported(); }
 		};
 
 		// Returns the statically known number of rotation formats supported by the decompression settings
@@ -188,6 +198,12 @@ namespace acl
 				// If our format is raw, only interpolate if our alpha isn't <= 0.0 or >= 1.0
 				// otherwise we always interpolate
 				: format == rotation_format8::quatf_full ? (interpolation_alpha > 0.0F && interpolation_alpha < 1.0F) : true;
+		}
+
+		template<class decompression_settings_type>
+		constexpr compressed_tracks_version16 get_version(compressed_tracks_version16 version)
+		{
+			return decompression_settings_type::version_supported() == compressed_tracks_version16::any ? version : decompression_settings_type::version_supported();
 		}
 	}
 

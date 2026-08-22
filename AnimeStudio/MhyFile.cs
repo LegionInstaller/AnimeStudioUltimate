@@ -107,14 +107,26 @@ namespace AnimeStudio
             Logger.Verbose($"uncompressed blocksInfo size: 0x{m_Header.uncompressedBlocksInfoSize:X8}");
             var compressedBlocksInfo = blocksInfoReader.ReadBytes((int)blocksInfoReader.Remaining);
 
+            if (m_Header.uncompressedBlocksInfoSize == 0 || m_Header.uncompressedBlocksInfoSize > int.MaxValue)
+            {
+                throw new InvalidDataException($"Invalid uncompressed blocksInfo size 0x{m_Header.uncompressedBlocksInfoSize:X8} at bundle offset 0x{Offset:X} (compressed size 0x{m_Header.compressedBlocksInfoSize:X8})");
+            }
+
             var uncompressedBlocksInfo = ArrayPool<byte>.Shared.Rent((int)m_Header.uncompressedBlocksInfoSize);
             var uncompressedBlocksInfoSpan = uncompressedBlocksInfo.AsSpan(0, (int)m_Header.uncompressedBlocksInfoSize);
 
             try
             {
                 int numWrite;
-                isOodle = compressedBlocksInfo[0] == 0x8C;
+                isOodle = compressedBlocksInfo.Length > 0 && compressedBlocksInfo[0] == 0x8C;
                 numWrite = Decompress(compressedBlocksInfo, uncompressedBlocksInfoSpan);
+                // Unlike ReadBlocks, this used to go unchecked: a wrongly decompressed
+                // blocksInfo produced an absurd nodesCount and only blew up much later
+                // with an EndOfStreamException far away from the real cause.
+                if (numWrite != m_Header.uncompressedBlocksInfoSize)
+                {
+                    throw new IOException($"BlocksInfo decompression error at bundle offset 0x{Offset:X}: wrote {numWrite} bytes but expected {m_Header.uncompressedBlocksInfoSize} bytes (compressed 0x{m_Header.compressedBlocksInfoSize:X8}, payload {compressedBlocksInfo.Length} bytes, codec {(isOodle ? "Oodle" : "Lz4")})");
+                }
 
                 Logger.Verbose($"Writing block and directory to blocks stream...");
                 using var blocksInfoUncompressedStream = new MemoryStream(uncompressedBlocksInfo, 0, (int)m_Header.uncompressedBlocksInfoSize);
@@ -218,16 +230,46 @@ namespace AnimeStudio
         }
         private int Decompress(Span<byte> compressed, Span<byte> decompressed)
         {
+            // Normal case: the codec picked from the blocksInfo magic byte (0x8C = Oodle).
+            var numWrite = TryDecompress(isOodle, compressed, decompressed, out var error);
+            if (numWrite == decompressed.Length)
+            {
+                return numWrite;
+            }
+
+            // The guess was wrong (threw, or wrote the wrong amount) — try the other codec
+            // once. Both callers verify numWrite afterwards, so a bogus result still throws.
+            Logger.Warning($"{CodecName(isOodle)} decompression wrote {numWrite} of {decompressed.Length} expected bytes{(error != null ? $" ({error.Message})" : "")}, retrying with {CodecName(!isOodle)}...");
+            var fallbackWrite = TryDecompress(!isOodle, compressed, decompressed, out var fallbackError);
+            if (fallbackWrite == decompressed.Length)
+            {
+                isOodle = !isOodle;
+                return fallbackWrite;
+            }
+
+            if (error != null && fallbackError != null)
+            {
+                Logger.Error($"Decompression failed: {error.Message}");
+                throw error;
+            }
+            return numWrite;
+        }
+
+        private static string CodecName(bool oodle) => oodle ? "Oodle" : "Lz4";
+
+        private static int TryDecompress(bool oodle, Span<byte> compressed, Span<byte> decompressed, out Exception error)
+        {
+            error = null;
             try
             {
-                if (isOodle)
-                    return OodleHelper.Decompress(compressed, decompressed);
-                else
-                    return LZ4.Instance.Decompress(compressed, decompressed);
-            } catch (Exception ex)
+                return oodle
+                    ? OodleHelper.Decompress(compressed, decompressed)
+                    : LZ4.Instance.Decompress(compressed, decompressed);
+            }
+            catch (Exception ex)
             {
-                Logger.Error($"Decompression failed: {ex.Message}");
-                throw;
+                error = ex;
+                return -1;
             }
         }
 

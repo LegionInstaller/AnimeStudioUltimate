@@ -269,7 +269,10 @@ namespace AnimeStudio
                 }
 
                 //SInt16 m_SortingLayer 5.6 and up
-                var m_SortingLayer2 = reader.ReadInt16();
+                if (version[0] > 5 || (version[0] == 5 && version[1] >= 6)) //5.6 and up
+                {
+                    var m_SortingLayer2 = reader.ReadInt16();
+                }
                 var m_SortingOrder = reader.ReadInt16();
                 reader.AlignStream();
                 if (version[0] > 6000 || (version[0] == 6000 && version[1] >= 3)) //6000.3 and up

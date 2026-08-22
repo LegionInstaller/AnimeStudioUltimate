@@ -26,9 +26,9 @@
 
 #include "acl/version.h"
 #include "acl/core/impl/compiler_utils.h"
-#include "acl/decompression/impl/scalar_track_decompression.h"
-#include "acl/decompression/impl/transform_track_decompression.h"
-#include "acl/decompression/impl/universal_track_decompression.h"
+#include "acl/decompression/impl/decompression.scalar.h"
+#include "acl/decompression/impl/decompression.transform.h"
+#include "acl/decompression/impl/decompression.universal.h"
 
 ACL_IMPL_FILE_PRAGMA_PUSH
 
@@ -40,23 +40,41 @@ namespace acl
 	{
 		//////////////////////////////////////////////////////////////////////////
 		// Helper struct to choose the decompression context type based on what tracks we support
-		template<bool supports_scalar_tracks, bool supports_transform_tracks>
+		template<bool supports_scalar_tracks, bool supports_transform_tracks, bool is_hoyo>
 		struct persistent_decompression_context_selector {};
 
 		template<>
-		struct persistent_decompression_context_selector<true, false>
+		struct persistent_decompression_context_selector<true, false, false>
 		{
 			using type = persistent_scalar_decompression_context_v0;
 		};
 
 		template<>
-		struct persistent_decompression_context_selector<false, true>
+		struct persistent_decompression_context_selector<true, false, true>
+		{
+			using type = persistent_hoyo_decompression_context_v0;
+		};
+
+		template<>
+		struct persistent_decompression_context_selector<false, true, false>
 		{
 			using type = persistent_transform_decompression_context_v0;
 		};
 
 		template<>
-		struct persistent_decompression_context_selector<true, true>
+		struct persistent_decompression_context_selector<false, true, true>
+		{
+			using type = persistent_transform_decompression_context_v0;
+		};
+
+		template<>
+		struct persistent_decompression_context_selector<true, true, false>
+		{
+			using type = persistent_universal_decompression_context;
+		};
+
+		template<>
+		struct persistent_decompression_context_selector<true, true, true>
 		{
 			using type = persistent_universal_decompression_context;
 		};

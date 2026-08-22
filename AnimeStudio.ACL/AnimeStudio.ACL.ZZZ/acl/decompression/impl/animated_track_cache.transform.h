@@ -25,9 +25,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "acl/version.h"
+#include "acl/core/impl/bit_cast.impl.h"
 #include "acl/core/impl/compiler_utils.h"
 #include "acl/decompression/impl/track_cache.h"
-#include "acl/decompression/impl/transform_decompression_context.h"
+#include "acl/decompression/impl/decompression_context.transform.h"
 #include "acl/math/quatf.h"
 #include "acl/math/vector4f.h"
 
@@ -269,12 +270,12 @@ namespace acl
 			{
 				// First segment data is duplicated
 				// Use 256 bit stores to avoid doing too many stores which might stall
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_min[0]), _mm256_set_m128(segment_range_min_xxxx, segment_range_min_xxxx));
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_min[2]), _mm256_set_m128(segment_range_min_yyyy, segment_range_min_yyyy));
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_min[4]), _mm256_set_m128(segment_range_min_zzzz, segment_range_min_zzzz));
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_extent[0]), _mm256_set_m128(segment_range_extent_xxxx, segment_range_extent_xxxx));
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_extent[2]), _mm256_set_m128(segment_range_extent_yyyy, segment_range_extent_yyyy));
-				_mm256_store_ps(reinterpret_cast<float*>(&output_scratch.segment_range_extent[4]), _mm256_set_m128(segment_range_extent_zzzz, segment_range_extent_zzzz));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_min[0]), _mm256_set_m128(segment_range_min_xxxx, segment_range_min_xxxx));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_min[2]), _mm256_set_m128(segment_range_min_yyyy, segment_range_min_yyyy));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_min[4]), _mm256_set_m128(segment_range_min_zzzz, segment_range_min_zzzz));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_extent[0]), _mm256_set_m128(segment_range_extent_xxxx, segment_range_extent_xxxx));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_extent[2]), _mm256_set_m128(segment_range_extent_yyyy, segment_range_extent_yyyy));
+				_mm256_store_ps(bit_cast<float*>(&output_scratch.segment_range_extent[4]), _mm256_set_m128(segment_range_extent_zzzz, segment_range_extent_zzzz));
 			}
 			else
 			{
@@ -321,12 +322,11 @@ namespace acl
 			segment_range_min_zzzz = _mm_andnot_ps(segment_range_ignore_mask_v, segment_range_min_zzzz);
 #elif defined(RTM_NEON_INTRINSICS)
 			// Mask out the segment min we ignore
-			const uint32x4_t segment_range_ignore_mask_vu32 = vreinterpretq_u32_s32(vmovl_s16(vget_low_s16(range_reduction_masks)));
-			const float32x4_t segment_range_ignore_mask_v = vreinterpretq_f32_u32(segment_range_ignore_mask_vu32);
+			const uint32x4_t segment_range_ignore_mask_v = vreinterpretq_u32_s32(vmovl_s16(vget_low_s16(range_reduction_masks)));
 
-			segment_range_min_xxxx = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_xxxx), segment_range_ignore_mask_vu32));
-			segment_range_min_yyyy = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_yyyy), segment_range_ignore_mask_vu32));
-			segment_range_min_zzzz = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_zzzz), segment_range_ignore_mask_vu32));
+			segment_range_min_xxxx = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_xxxx), segment_range_ignore_mask_v));
+			segment_range_min_yyyy = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_yyyy), segment_range_ignore_mask_v));
+			segment_range_min_zzzz = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(segment_range_min_zzzz), segment_range_ignore_mask_v));
 #else
 			const rtm::vector4f zero_v = rtm::vector_zero();
 
@@ -358,13 +358,13 @@ namespace acl
 			// Load and mask out our segment range data
 			const __m256 one_v = _mm256_set1_ps(1.0F);
 
-			__m256 segment_range_min_xxxx0_xxxx1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_min[0]));
-			__m256 segment_range_min_yyyy0_yyyy1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_min[2]));
-			__m256 segment_range_min_zzzz0_zzzz1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_min[4]));
+			__m256 segment_range_min_xxxx0_xxxx1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_min[0]));
+			__m256 segment_range_min_yyyy0_yyyy1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_min[2]));
+			__m256 segment_range_min_zzzz0_zzzz1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_min[4]));
 
-			__m256 segment_range_extent_xxxx0_xxxx1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_extent[0]));
-			__m256 segment_range_extent_yyyy0_yyyy1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_extent[2]));
-			__m256 segment_range_extent_zzzz0_zzzz1 = _mm256_load_ps(reinterpret_cast<const float*>(&segment_scratch.segment_range_extent[4]));
+			__m256 segment_range_extent_xxxx0_xxxx1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_extent[0]));
+			__m256 segment_range_extent_yyyy0_yyyy1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_extent[2]));
+			__m256 segment_range_extent_zzzz0_zzzz1 = _mm256_load_ps(bit_cast<const float*>(&segment_scratch.segment_range_extent[4]));
 
 			// Mask out the segment min we ignore
 			const __m128 segment_range_ignore_mask_v0 = _mm_castsi128_ps(_mm_unpacklo_epi16(range_reduction_masks0, range_reduction_masks0));
@@ -400,8 +400,8 @@ namespace acl
 			const __m128 clip_range_mask0 = _mm_castsi128_ps(_mm_unpackhi_epi16(range_reduction_masks0, range_reduction_masks0));
 			const __m128 clip_range_mask1 = _mm_castsi128_ps(_mm_unpackhi_epi16(range_reduction_masks1, range_reduction_masks1));
 #elif defined(RTM_NEON_INTRINSICS)
-			const float32x4_t clip_range_mask0 = vreinterpretq_f32_s32(vmovl_s16(vget_high_s16(range_reduction_masks0)));
-			const float32x4_t clip_range_mask1 = vreinterpretq_f32_s32(vmovl_s16(vget_high_s16(range_reduction_masks1)));
+			const uint32x4_t clip_range_mask0 = vreinterpretq_u32_s32(vmovl_s16(vget_high_s16(range_reduction_masks0)));
+			const uint32x4_t clip_range_mask1 = vreinterpretq_u32_s32(vmovl_s16(vget_high_s16(range_reduction_masks1)));
 #else
 			const uint32_t clip_range_mask_u32_0 = uint32_t(range_reduction_masks0 >> 32);
 			const uint32_t clip_range_mask_u32_1 = uint32_t(range_reduction_masks1 >> 32);
@@ -427,13 +427,13 @@ namespace acl
 			const rtm::vector4f clip_range_min_yyyy1 = _mm_andnot_ps(clip_range_mask1, clip_range_min_yyyy);
 			const rtm::vector4f clip_range_min_zzzz1 = _mm_andnot_ps(clip_range_mask1, clip_range_min_zzzz);
 #elif defined(RTM_NEON_INTRINSICS)
-			const rtm::vector4f clip_range_min_xxxx0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_xxxx), vreinterpretq_u32_f32(clip_range_mask0)));
-			const rtm::vector4f clip_range_min_yyyy0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_yyyy), vreinterpretq_u32_f32(clip_range_mask0)));
-			const rtm::vector4f clip_range_min_zzzz0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_zzzz), vreinterpretq_u32_f32(clip_range_mask0)));
+			const rtm::vector4f clip_range_min_xxxx0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_xxxx), clip_range_mask0));
+			const rtm::vector4f clip_range_min_yyyy0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_yyyy), clip_range_mask0));
+			const rtm::vector4f clip_range_min_zzzz0 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_zzzz), clip_range_mask0));
 
-			const rtm::vector4f clip_range_min_xxxx1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_xxxx), vreinterpretq_u32_f32(clip_range_mask1)));
-			const rtm::vector4f clip_range_min_yyyy1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_yyyy), vreinterpretq_u32_f32(clip_range_mask1)));
-			const rtm::vector4f clip_range_min_zzzz1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_zzzz), vreinterpretq_u32_f32(clip_range_mask1)));
+			const rtm::vector4f clip_range_min_xxxx1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_xxxx), clip_range_mask1));
+			const rtm::vector4f clip_range_min_yyyy1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_yyyy), clip_range_mask1));
+			const rtm::vector4f clip_range_min_zzzz1 = vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(clip_range_min_zzzz), clip_range_mask1));
 #else
 			const rtm::vector4f zero_v = rtm::vector_zero();
 
@@ -517,6 +517,10 @@ namespace acl
 			uint32_t num_to_unpack, segment_animated_sampling_context_v0& segment_sampling_context)
 		{
 			const rotation_format8 rotation_format = get_rotation_format<decompression_settings_type>(decomp_context.rotation_format);
+			const compressed_tracks_version16 version = get_version<decompression_settings_type>(decomp_context.get_version());
+
+			// See write_format_per_track_data(..) for details
+			const uint32_t num_raw_bit_rate_bits = version >= compressed_tracks_version16::v02_01_99_1 && version != compressed_tracks_version16::vHoYo ? 31U : 32U;
 
 			uint32_t segment_range_ignore_mask = 0;
 			uint32_t clip_range_ignore_mask = 0;
@@ -567,7 +571,7 @@ namespace acl
 						// Merge sample.xy together (1x shuffle)
 						// Merge sample.xyz together (1x shuffle)
 						// Convert to floats and normalize
-						__m128i xyz = _mm_setr_epi32(x, y, z, 0);
+						__m128i xyz = _mm_setr_epi32(static_cast<int32_t>(x), static_cast<int32_t>(y), static_cast<int32_t>(z), 0);
 						__m128 xyzf = _mm_cvtepi32_ps(xyz);
 						rotation_as_vec = _mm_mul_ps(xyzf, _mm_set_ps1(1.0F / 65535.0F));
 #elif defined(RTM_NEON_INTRINSICS)
@@ -582,7 +586,7 @@ namespace acl
 						sample_segment_range_ignore_mask = 0xFF;	// Ignore segment range
 						sample_clip_range_ignore_mask = 0x00;
 					}
-					else if (num_bits_at_bit_rate == 32)			// Raw bit rate
+					else if (num_bits_at_bit_rate == num_raw_bit_rate_bits)	// Raw bit rate
 					{
 						rotation_as_vec = unpack_vector3_96_unsafe(animated_track_data, animated_track_data_bit_offset);
 						animated_track_data_bit_offset += 96;
@@ -653,7 +657,7 @@ namespace acl
 			if (rotation_format == rotation_format8::quatf_drop_w_variable && decompression_settings_type::is_rotation_format_supported(rotation_format8::quatf_drop_w_variable))
 			{
 #if defined(RTM_SSE2_INTRINSICS)
-				const __m128i ignore_masks_v8 = _mm_set_epi32(0, 0, clip_range_ignore_mask, segment_range_ignore_mask);
+				const __m128i ignore_masks_v8 = _mm_set_epi32(0, 0, static_cast<int32_t>(clip_range_ignore_mask), static_cast<int32_t>(segment_range_ignore_mask));
 				range_reduction_masks = _mm_unpacklo_epi8(ignore_masks_v8, ignore_masks_v8);
 #elif defined(RTM_NEON_INTRINSICS)
 				const int8x8_t ignore_masks_v8 = vcreate_s8((uint64_t(clip_range_ignore_mask) << 32) | segment_range_ignore_mask);
@@ -688,6 +692,10 @@ namespace acl
 			const clip_animated_sampling_context_v0& clip_sampling_context, const segment_animated_sampling_context_v0& segment_sampling_context)
 		{
 			const rotation_format8 rotation_format = get_rotation_format<decompression_settings_type>(decomp_context.rotation_format);
+			const compressed_tracks_version16 version = get_version<decompression_settings_type>(decomp_context.get_version());
+
+			// See write_format_per_track_data(..) for details
+			const uint32_t num_raw_bit_rate_bits = version >= compressed_tracks_version16::v02_01_99_1 && version != compressed_tracks_version16::vHoYo ? 31U : 32U;
 
 			uint32_t segment_range_ignore_mask = 0;
 			uint32_t clip_range_ignore_mask = 0;
@@ -707,13 +715,23 @@ namespace acl
 				{
 				default:
 				case 3:
-					skip_size += format_per_track_data[2];
+				{
+					// TODO: Can we do an alternate more efficient implementation? We want to increment by one if num bits == 31
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[2];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 2:
-					skip_size += format_per_track_data[1];
+				{
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[1];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 1:
-					skip_size += format_per_track_data[0];
+				{
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[0];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 0:
 					// Nothing to skip
@@ -747,7 +765,7 @@ namespace acl
 					// Merge sample.xy together (1x shuffle)
 					// Merge sample.xyz together (1x shuffle)
 					// Convert to floats and normalize
-					__m128i xyz = _mm_setr_epi32(x, y, z, 0);
+					__m128i xyz = _mm_setr_epi32(static_cast<int32_t>(x), static_cast<int32_t>(y), static_cast<int32_t>(z), 0);
 					__m128 xyzf = _mm_cvtepi32_ps(xyz);
 					rotation_as_vec = _mm_mul_ps(xyzf, _mm_set_ps1(1.0F / 65535.0F));
 #elif defined(RTM_NEON_INTRINSICS)
@@ -762,7 +780,7 @@ namespace acl
 					segment_range_ignore_mask = 0xFF;	// Ignore segment range
 					clip_range_ignore_mask = 0x00;
 				}
-				else if (num_bits_at_bit_rate == 32)	// Raw bit rate
+				else if (num_bits_at_bit_rate == num_raw_bit_rate_bits)	// Raw bit rate
 				{
 					rotation_as_vec = unpack_vector3_96_unsafe(animated_track_data, animated_track_data_bit_offset);
 					segment_range_ignore_mask = 0xFF;	// Ignore segment range
@@ -806,8 +824,8 @@ namespace acl
 					const uint32_t extent_z = segment_range_data[20];
 
 #if defined(RTM_SSE2_INTRINSICS)
-					__m128i min_u32 = _mm_setr_epi32(min_x, min_y, min_z, 0);
-					__m128i extent_u32 = _mm_setr_epi32(extent_x, extent_y, extent_z, 0);
+					__m128i min_u32 = _mm_setr_epi32(static_cast<int32_t>(min_x), static_cast<int32_t>(min_y), static_cast<int32_t>(min_z), 0);
+					__m128i extent_u32 = _mm_setr_epi32(static_cast<int32_t>(extent_x), static_cast<int32_t>(extent_y), static_cast<int32_t>(extent_z), 0);
 
 					rtm::vector4f segment_range_min = _mm_cvtepi32_ps(min_u32);
 					rtm::vector4f segment_range_extent = _mm_cvtepi32_ps(extent_u32);
@@ -831,7 +849,7 @@ namespace acl
 
 				if (clip_range_ignore_mask == 0)
 				{
-					const float* clip_range_data = reinterpret_cast<const float*>(clip_sampling_context.clip_range_data) + unpack_index;	// Offset to our sample
+					const float* clip_range_data = bit_cast<const float*>(clip_sampling_context.clip_range_data) + unpack_index;	// Offset to our sample
 
 					const float min_x = clip_range_data[group_size * 0];
 					const float min_y = clip_range_data[group_size * 1];
@@ -856,6 +874,10 @@ namespace acl
 			const clip_animated_sampling_context_v0& clip_sampling_context, segment_animated_sampling_context_v0& segment_sampling_context)
 		{
 			const vector_format8 format = get_vector_format<decompression_settings_adapter_type>(decompression_settings_adapter_type::get_vector_format(decomp_context));
+			const compressed_tracks_version16 version = get_version<decompression_settings_adapter_type>(decomp_context.get_version());
+
+			// See write_format_per_track_data(..) for details
+			const uint32_t num_raw_bit_rate_bits = version >= compressed_tracks_version16::v02_01_99_1 && version != compressed_tracks_version16::vHoYo ? 31U : 32U;
 
 			const uint8_t* format_per_track_data = segment_sampling_context.format_per_track_data;
 			const uint8_t* segment_range_data = segment_sampling_context.segment_range_data;
@@ -884,7 +906,7 @@ namespace acl
 						segment_range_data += sizeof(uint16_t) * 3;
 						range_ignore_flags = 0x01;	// Skip segment only
 					}
-					else if (num_bits_at_bit_rate == 32)	// Raw bit rate
+					else if (num_bits_at_bit_rate == num_raw_bit_rate_bits)	// Raw bit rate
 					{
 						sample = unpack_vector3_96_unsafe(animated_track_data, animated_track_data_bit_offset);
 						animated_track_data_bit_offset += 96;
@@ -973,6 +995,10 @@ namespace acl
 			const clip_animated_sampling_context_v0& clip_sampling_context, const segment_animated_sampling_context_v0& segment_sampling_context)
 		{
 			const vector_format8 format = get_vector_format<decompression_settings_adapter_type>(decompression_settings_adapter_type::get_vector_format(decomp_context));
+			const compressed_tracks_version16 version = get_version<decompression_settings_adapter_type>(decomp_context.get_version());
+
+			// See write_format_per_track_data(..) for details
+			const uint32_t num_raw_bit_rate_bits = version >= compressed_tracks_version16::v02_01_99_1 && version != compressed_tracks_version16::vHoYo ? 31U : 32U;
 
 			const uint8_t* format_per_track_data = segment_sampling_context.format_per_track_data;
 			const uint8_t* segment_range_data = segment_sampling_context.segment_range_data;
@@ -996,13 +1022,23 @@ namespace acl
 				{
 				default:
 				case 3:
-					skip_size += format_per_track_data[2];
+				{
+					// TODO: Can we do an alternate more efficient implementation? We want to increment by one if num bits == 31
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[2];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 2:
-					skip_size += format_per_track_data[1];
+				{
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[1];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 1:
-					skip_size += format_per_track_data[0];
+				{
+					const uint32_t num_bits_at_bit_rate = format_per_track_data[0];
+					skip_size += (num_bits_at_bit_rate == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate;
+				}
 					ACL_SWITCH_CASE_FALLTHROUGH_INTENTIONAL;
 				case 0:
 					// Nothing to skip
@@ -1021,7 +1057,7 @@ namespace acl
 					sample = unpack_vector3_u48_unsafe(segment_range_data);
 					range_ignore_flags = 0x01;	// Skip segment only
 				}
-				else if (num_bits_at_bit_rate == 32)	// Raw bit rate
+				else if (num_bits_at_bit_rate == num_raw_bit_rate_bits)	// Raw bit rate
 				{
 					sample = unpack_vector3_96_unsafe(animated_track_data, animated_track_data_bit_offset);
 					range_ignore_flags = 0x03;	// Skip clip and segment
@@ -1066,13 +1102,21 @@ namespace acl
 		}
 
 		// Force inline this function, we only use it to keep the code readable
+		template<class decompression_settings_adapter_type>
 		RTM_FORCE_INLINE RTM_DISABLE_SECURITY_COOKIE_CHECK void count_animated_group_bit_size(
+			const persistent_transform_decompression_context_v0& decomp_context,
 			const uint8_t* format_per_track_data0, const uint8_t* format_per_track_data1, uint32_t num_groups_to_skip,
 			uint32_t& out_group_bit_size_per_component0, uint32_t& out_group_bit_size_per_component1)
 		{
+			const compressed_tracks_version16 version = get_version<decompression_settings_adapter_type>(decomp_context.get_version());
+
+			// See write_format_per_track_data(..) for details
+			const uint32_t num_raw_bit_rate_bits = version >= compressed_tracks_version16::v02_01_99_1 && version != compressed_tracks_version16::vHoYo ? 31U : 32U;
+
 			// TODO: Do the same with NEON
-#if defined(RTM_AVX_INTRINSICS)
-			__m128i zero = _mm_setzero_si128();
+#if defined(RTM_SSE3_INTRINSICS)
+			const __m128i zero = _mm_setzero_si128();
+			const __m128i num_raw_bit_rate_bits_v = _mm_set1_epi32(static_cast<int32_t>(num_raw_bit_rate_bits));
 			__m128i group_bit_size_per_component0_v = zero;
 			__m128i group_bit_size_per_component1_v = zero;
 
@@ -1080,36 +1124,66 @@ namespace acl
 			for (uint32_t group_index = 0; group_index < num_groups_to_skip; ++group_index)
 			{
 				const uint32_t group_offset = group_index * 4;
-				const __m128i group_bit_size_per_component0_u8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(format_per_track_data0 + group_offset));
-				const __m128i group_bit_size_per_component1_u8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(format_per_track_data1 + group_offset));
+				const __m128i group_bit_size_per_component0_u8 = _mm_loadu_si128(bit_cast<const __m128i*>(format_per_track_data0 + group_offset));
+				const __m128i group_bit_size_per_component1_u8 = _mm_loadu_si128(bit_cast<const __m128i*>(format_per_track_data1 + group_offset));
 
-				group_bit_size_per_component0_v = _mm_add_epi32(group_bit_size_per_component0_v, _mm_unpacklo_epi16(_mm_unpacklo_epi8(group_bit_size_per_component0_u8, zero), zero));
-				group_bit_size_per_component1_v = _mm_add_epi32(group_bit_size_per_component1_v, _mm_unpacklo_epi16(_mm_unpacklo_epi8(group_bit_size_per_component1_u8, zero), zero));
+				// Unpack from uint8_t to uint32_t
+				__m128i group_bit_size_per_component0_u32 = _mm_unpacklo_epi16(_mm_unpacklo_epi8(group_bit_size_per_component0_u8, zero), zero);
+				__m128i group_bit_size_per_component1_u32 = _mm_unpacklo_epi16(_mm_unpacklo_epi8(group_bit_size_per_component1_u8, zero), zero);
+
+				if (version >= compressed_tracks_version16::v02_01_99_1)
+				{
+					// If the number of bits is 31, we are the raw bit rate and we need to add 1 (we'll add 31 below, and 1 more for a total of 32 bits)
+					// If the number of bits is 31, our mask's value will be 0xFFFFFFFF which is -1, otherwise it is 0x00000000
+					const __m128i is_raw_num_bits0 = _mm_cmpeq_epi32(group_bit_size_per_component0_u32, num_raw_bit_rate_bits_v);
+					const __m128i is_raw_num_bits1 = _mm_cmpeq_epi32(group_bit_size_per_component1_u32, num_raw_bit_rate_bits_v);
+
+					// We subtract the mask value directly, it is either -1 or 0
+					group_bit_size_per_component0_u32 = _mm_sub_epi32(group_bit_size_per_component0_u32, is_raw_num_bits0);
+					group_bit_size_per_component1_u32 = _mm_sub_epi32(group_bit_size_per_component1_u32, is_raw_num_bits1);
+				}
+				else
+					(void)num_raw_bit_rate_bits_v;
+
+				// Add how many bits per component we have
+				group_bit_size_per_component0_v = _mm_add_epi32(group_bit_size_per_component0_v, group_bit_size_per_component0_u32);
+				group_bit_size_per_component1_v = _mm_add_epi32(group_bit_size_per_component1_v, group_bit_size_per_component1_u32);
 			}
 
 			// Now we sum horizontally
 			group_bit_size_per_component0_v = _mm_hadd_epi32(_mm_hadd_epi32(group_bit_size_per_component0_v, group_bit_size_per_component0_v), group_bit_size_per_component0_v);
 			group_bit_size_per_component1_v = _mm_hadd_epi32(_mm_hadd_epi32(group_bit_size_per_component1_v, group_bit_size_per_component1_v), group_bit_size_per_component1_v);
 
-			out_group_bit_size_per_component0 = _mm_cvtsi128_si32(group_bit_size_per_component0_v);
-			out_group_bit_size_per_component1 = _mm_cvtsi128_si32(group_bit_size_per_component1_v);
+			out_group_bit_size_per_component0 = static_cast<uint32_t>(_mm_cvtsi128_si32(group_bit_size_per_component0_v));
+			out_group_bit_size_per_component1 = static_cast<uint32_t>(_mm_cvtsi128_si32(group_bit_size_per_component1_v));
 #else
 			uint32_t group_bit_size_per_component0 = 0;
 			uint32_t group_bit_size_per_component1 = 0;
 
 			for (uint32_t group_index = 0; group_index < num_groups_to_skip; ++group_index)
 			{
-				group_bit_size_per_component0 += format_per_track_data0[(group_index * 4) + 0];
-				group_bit_size_per_component1 += format_per_track_data1[(group_index * 4) + 0];
+				// TODO: Can we do an alternate more efficient implementation? We want to increment by one if num bits == 31
 
-				group_bit_size_per_component0 += format_per_track_data0[(group_index * 4) + 1];
-				group_bit_size_per_component1 += format_per_track_data1[(group_index * 4) + 1];
+				const uint32_t num_bits_at_bit_rate_0_0 = format_per_track_data0[(group_index * 4) + 0];
+				const uint32_t num_bits_at_bit_rate_1_0 = format_per_track_data1[(group_index * 4) + 0];
+				const uint32_t num_bits_at_bit_rate_0_1 = format_per_track_data0[(group_index * 4) + 1];
+				const uint32_t num_bits_at_bit_rate_1_1 = format_per_track_data1[(group_index * 4) + 1];
+				const uint32_t num_bits_at_bit_rate_0_2 = format_per_track_data0[(group_index * 4) + 2];
+				const uint32_t num_bits_at_bit_rate_1_2 = format_per_track_data1[(group_index * 4) + 2];
+				const uint32_t num_bits_at_bit_rate_0_3 = format_per_track_data0[(group_index * 4) + 3];
+				const uint32_t num_bits_at_bit_rate_1_3 = format_per_track_data1[(group_index * 4) + 3];
 
-				group_bit_size_per_component0 += format_per_track_data0[(group_index * 4) + 2];
-				group_bit_size_per_component1 += format_per_track_data1[(group_index * 4) + 2];
+				group_bit_size_per_component0 += (num_bits_at_bit_rate_0_0 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_0_0;
+				group_bit_size_per_component1 += (num_bits_at_bit_rate_1_0 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_1_0;
 
-				group_bit_size_per_component0 += format_per_track_data0[(group_index * 4) + 3];
-				group_bit_size_per_component1 += format_per_track_data1[(group_index * 4) + 3];
+				group_bit_size_per_component0 += (num_bits_at_bit_rate_0_1 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_0_1;
+				group_bit_size_per_component1 += (num_bits_at_bit_rate_1_1 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_1_1;
+
+				group_bit_size_per_component0 += (num_bits_at_bit_rate_0_2 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_0_2;
+				group_bit_size_per_component1 += (num_bits_at_bit_rate_1_2 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_1_2;
+
+				group_bit_size_per_component0 += (num_bits_at_bit_rate_0_3 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_0_3;
+				group_bit_size_per_component1 += (num_bits_at_bit_rate_1_3 == num_raw_bit_rate_bits) ? 32 : num_bits_at_bit_rate_1_3;
 			}
 
 			out_group_bit_size_per_component0 = group_bit_size_per_component0;
@@ -1149,10 +1223,11 @@ namespace acl
 			template<class decompression_settings_type, class decompression_settings_translation_adapter_type>
 			void RTM_DISABLE_SECURITY_COOKIE_CHECK initialize(const persistent_transform_decompression_context_v0& decomp_context)
 			{
-				const transform_tracks_header& transform_header = get_transform_tracks_header(*decomp_context.tracks);
+				const compressed_tracks* tracks = decomp_context.tracks;
+				const transform_tracks_header& transform_header = get_transform_tracks_header(*tracks);
 
-				const segment_header* segment0 = decomp_context.segment_offsets[0].add_to(decomp_context.tracks);
-				const segment_header* segment1 = decomp_context.segment_offsets[1].add_to(decomp_context.tracks);
+				const segment_header* segment0 = decomp_context.segment_offsets[0].add_to(tracks);
+				const segment_header* segment1 = decomp_context.segment_offsets[1].add_to(tracks);
 
 				const uint8_t* animated_track_data0 = decomp_context.animated_track_data[0];
 				const uint8_t* animated_track_data1 = decomp_context.animated_track_data[1];
@@ -1182,19 +1257,19 @@ namespace acl
 				const uint32_t num_animated_rotation_sub_tracks_padded = align_to(transform_header.num_animated_rotation_sub_tracks, 4);
 
 				// Rotation range data follows translations, no padding
-				const uint32_t rotation_clip_range_data_size = are_rotations_variable ? (sizeof(rtm::float3f) * 2) : 0;
+				const uint32_t rotation_clip_range_data_size = are_rotations_variable ? (sizeof(rtm::float3f) * 2U) : 0U;
 				const uint8_t* clip_range_data_translations = clip_range_data_rotations + (transform_header.num_animated_rotation_sub_tracks * rotation_clip_range_data_size);
 				clip_sampling_context_translations.clip_range_data = clip_range_data_translations;
 
 				// Rotation metadata is padded to 4 sub-tracks (1 byte each)
-				const uint32_t rotation_per_track_metadata_size = are_rotations_variable ? 1 : 0;
+				const uint32_t rotation_per_track_metadata_size = are_rotations_variable ? 1U : 0U;
 				const uint8_t* format_per_track_data_translations0 = format_per_track_data_rotations0 + (num_animated_rotation_sub_tracks_padded * rotation_per_track_metadata_size);
 				const uint8_t* format_per_track_data_translations1 = format_per_track_data_rotations1 + (num_animated_rotation_sub_tracks_padded * rotation_per_track_metadata_size);
 				segment_sampling_context_translations[0].format_per_track_data = format_per_track_data_translations0;
 				segment_sampling_context_translations[1].format_per_track_data = format_per_track_data_translations1;
 
 				// Rotation range data is padded to 4 sub-tracks (6 bytes each)
-				const uint32_t rotation_segment_range_data_size = are_rotations_variable ? 6 : 0;
+				const uint32_t rotation_segment_range_data_size = are_rotations_variable ? 6U : 0U;
 				const uint8_t* segment_range_data_translations0 = segment_range_data_rotations0 + (num_animated_rotation_sub_tracks_padded * rotation_segment_range_data_size);
 				const uint8_t* segment_range_data_translations1 = segment_range_data_rotations1 + (num_animated_rotation_sub_tracks_padded * rotation_segment_range_data_size);
 				segment_sampling_context_translations[0].segment_range_data = segment_range_data_translations0;
@@ -1215,14 +1290,14 @@ namespace acl
 					const bool are_translations_variable = translation_format == vector_format8::vector3f_variable && decompression_settings_translation_adapter_type::is_vector_format_supported(vector_format8::vector3f_variable);
 
 					// Scale data just follows the translation data without any extra padding
-					const uint32_t translation_clip_range_data_size = are_translations_variable ? (sizeof(rtm::float3f) * 2) : 0;
+					const uint32_t translation_clip_range_data_size = are_translations_variable ? (sizeof(rtm::float3f) * 2U) : 0U;
 					clip_sampling_context_scales.clip_range_data = clip_range_data_translations + (transform_header.num_animated_translation_sub_tracks * translation_clip_range_data_size);
 
-					const uint32_t translation_per_track_metadata_size = are_translations_variable ? 1 : 0;
+					const uint32_t translation_per_track_metadata_size = are_translations_variable ? 1U : 0U;
 					segment_sampling_context_scales[0].format_per_track_data = format_per_track_data_translations0 + (transform_header.num_animated_translation_sub_tracks * translation_per_track_metadata_size);
 					segment_sampling_context_scales[1].format_per_track_data = format_per_track_data_translations1 + (transform_header.num_animated_translation_sub_tracks * translation_per_track_metadata_size);
 
-					const uint32_t translation_segment_range_data_size = are_translations_variable ? 6 : 0;
+					const uint32_t translation_segment_range_data_size = are_translations_variable ? 6U : 0U;
 					segment_sampling_context_scales[0].segment_range_data = segment_range_data_translations0 + (transform_header.num_animated_translation_sub_tracks * translation_segment_range_data_size);
 					segment_sampling_context_scales[1].segment_range_data = segment_range_data_translations1 + (transform_header.num_animated_translation_sub_tracks * translation_segment_range_data_size);
 
@@ -1603,7 +1678,7 @@ namespace acl
 
 					uint32_t group_bit_size_per_component0;
 					uint32_t group_bit_size_per_component1;
-					count_animated_group_bit_size(format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
+					count_animated_group_bit_size<decompression_settings_type>(decomp_context, format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
 
 					const uint32_t format_per_track_data_skip_size = num_groups_to_skip * 4;
 					const uint32_t segment_range_data_skip_size = num_groups_to_skip * 6 * 4;
@@ -1777,7 +1852,7 @@ namespace acl
 
 					uint32_t group_bit_size_per_component0;
 					uint32_t group_bit_size_per_component1;
-					count_animated_group_bit_size(format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
+					count_animated_group_bit_size<decompression_settings_adapter_type>(decomp_context, format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
 
 					const uint32_t format_per_track_data_skip_size = num_groups_to_skip * 4;
 					const uint32_t segment_range_data_skip_size = num_groups_to_skip * 6 * 4;
@@ -1899,7 +1974,7 @@ namespace acl
 
 					uint32_t group_bit_size_per_component0;
 					uint32_t group_bit_size_per_component1;
-					count_animated_group_bit_size(format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
+					count_animated_group_bit_size<decompression_settings_adapter_type>(decomp_context, format_per_track_data0, format_per_track_data1, num_groups_to_skip, group_bit_size_per_component0, group_bit_size_per_component1);
 
 					const uint32_t format_per_track_data_skip_size = num_groups_to_skip * 4;
 					const uint32_t segment_range_data_skip_size = num_groups_to_skip * 6 * 4;

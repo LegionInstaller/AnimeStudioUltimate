@@ -326,7 +326,7 @@ namespace AnimeStudio
 
             if (m_State.offsetFactor.val != 0f || m_State.offsetUnits.val != 0f)
             {
-                sb.Append($"  Offset {m_State.offsetFactor.val}, {m_State.offsetUnits.val}\n");
+                sb.Append(FormattableString.Invariant($"  Offset {m_State.offsetFactor.val}, {m_State.offsetUnits.val}\n"));
             }
 
             if (m_State.stencilRef.val != 0f ||
@@ -348,15 +348,15 @@ namespace AnimeStudio
                 sb.Append("  Stencil {\n");
                 if (m_State.stencilRef.val != 0f)
                 {
-                    sb.Append($"   Ref {m_State.stencilRef.val}\n");
+                    sb.Append(FormattableString.Invariant($"   Ref {m_State.stencilRef.val}\n"));
                 }
                 if (m_State.stencilReadMask.val != 255f)
                 {
-                    sb.Append($"   ReadMask {m_State.stencilReadMask.val}\n");
+                    sb.Append(FormattableString.Invariant($"   ReadMask {m_State.stencilReadMask.val}\n"));
                 }
                 if (m_State.stencilWriteMask.val != 255f)
                 {
-                    sb.Append($"   WriteMask {m_State.stencilWriteMask.val}\n");
+                    sb.Append(FormattableString.Invariant($"   WriteMask {m_State.stencilWriteMask.val}\n"));
                 }
                 if (m_State.stencilOp.pass.val != 0f ||
                     m_State.stencilOp.fail.val != 0f ||
@@ -711,7 +711,7 @@ namespace AnimeStudio
                     sb.Append("Float");
                     break;
                 case SerializedPropertyType.Range:
-                    sb.Append($"Range({m_Prop.m_DefValue[1]}, {m_Prop.m_DefValue[2]})");
+                    sb.Append(FormattableString.Invariant($"Range({m_Prop.m_DefValue[1]}, {m_Prop.m_DefValue[2]})"));
                     break;
                 case SerializedPropertyType.Texture:
                     switch (m_Prop.m_DefTexture.m_TexDim)
@@ -742,11 +742,11 @@ namespace AnimeStudio
             {
                 case SerializedPropertyType.Color:
                 case SerializedPropertyType.Vector:
-                    sb.Append($"({m_Prop.m_DefValue[0]},{m_Prop.m_DefValue[1]},{m_Prop.m_DefValue[2]},{m_Prop.m_DefValue[3]})");
+                    sb.Append(FormattableString.Invariant($"({m_Prop.m_DefValue[0]},{m_Prop.m_DefValue[1]},{m_Prop.m_DefValue[2]},{m_Prop.m_DefValue[3]})"));
                     break;
                 case SerializedPropertyType.Float:
                 case SerializedPropertyType.Range:
-                    sb.Append(m_Prop.m_DefValue[0]);
+                    sb.Append(m_Prop.m_DefValue[0].ToString(CultureInfo.InvariantCulture));
                     break;
                 case SerializedPropertyType.Texture:
                     sb.Append($"\"{m_Prop.m_DefTexture.m_DefaultName}\" {{ }}");

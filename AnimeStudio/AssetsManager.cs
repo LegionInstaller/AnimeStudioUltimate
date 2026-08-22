@@ -248,7 +248,10 @@ namespace AnimeStudio
                     var assetsFile = new SerializedFile(reader, this);
                     CheckStrippedVersion(assetsFile);
                     assetsFileList.Add(assetsFile);
-                    assetsFileIndexCache.Add(assetsFile.fileName, assetsFileList.Count - 1);
+                    // TryAdd: Load() resets assetsFileListHash but not the index cache (only
+                    // ClearLoadedAssets does), so a second load run without Clear() would throw
+                    // ArgumentException here and abort the rest of this block silently.
+                    assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
                     assetsFileListHash.Add(assetsFile.fileName);
 
                     // External lookup does recursive Directory.GetFiles scans. Skip it when
@@ -320,7 +323,9 @@ namespace AnimeStudio
                     }
                     CheckStrippedVersion(assetsFile);
                     assetsFileList.Add(assetsFile);
-                    assetsFileIndexCache.Add(assetsFile.fileName, assetsFileList.Count - 1);
+                    // TryAdd, see LoadAssetsFile: a duplicate CAB name (second load run without
+                    // Clear()) must not throw and make this file look like a read failure.
+                    assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
                     assetsFileListHash.Add(assetsFile.fileName);
                 }
                 catch (Exception e)
@@ -890,112 +895,167 @@ namespace AnimeStudio
             if (Game.Type.IsZZZGroup())
             {
                 Logger.Info($"Found {avatars.Count} Avatars");
+
+                // Per-strategy tallies so the two routes can be compared on real data.
+                var attachedBy = new int[3];
+                var unattached = 0;
+
                 foreach (var avatar in avatars)
                 {
                     var rootName = avatar.Name;
                     Logger.Verbose($"Attempting to process SeparateMesh for {rootName}");
 
-
-                    if (avatar.m_Transform != null)
+                    if (avatar.m_Transform == null)
                     {
-                        foreach (var childPtr in avatar.m_Transform.m_Children)
+                        continue;
+                    }
+
+                    foreach (var childPtr in avatar.m_Transform.m_Children)
+                    {
+                        if (!childPtr.TryGet(out var child) || !child.m_GameObject.TryGet(out var childGO))
                         {
-                            if (childPtr.TryGet(out var child) && child.m_GameObject.TryGet(out var childGO))
+                            continue;
+                        }
+
+                        // Two strategies exist for naming a ZZZ separate mesh and neither covers
+                        // every asset: the NapLodController component records the real asset path
+                        // (precise, but the component is not always present), while _Model bundles
+                        // follow the SeparateMesh_<avatar>_<child> convention. Try them in order of
+                        // precision and stop at the first one that attaches.
+                        var attached = false;
+                        foreach (var (candidate, strategy) in SeparateMeshCandidates(childGO, rootName))
+                        {
+                            if (TryAttachSeparateMesh(childGO, candidate, separateMeshes))
                             {
-                                var childName = childGO.Name;
-                                foreach (var i in childGO.m_Components)
-                                {
-                                    if (i.TryGet<MonoBehaviour>(out var comp))
-                                    {
-                                        if(comp.Name == "NapLodController")
-                                        {
-                                            // Safely decode raw bytes to string
-                                            var raw = comp.GetRawData();
-                                            string Path = raw != null ? System.Text.Encoding.UTF8.GetString(raw) : string.Empty;
-                                            if (string.IsNullOrEmpty(Path))
-                                                continue;
-
-                                            int assetIndex = Path.IndexOf("Assets", StringComparison.Ordinal);
-
-                                            string trimmed;
-                                            if (assetIndex != -1)
-                                            {
-                                                // Return the substring starting from the found index
-                                                trimmed = Path.Substring(assetIndex);
-                                            }
-                                            else if (Path.Length > 40)
-                                            {
-                                                // only take substring if long enough
-                                                trimmed = Path.Substring(40);
-                                            }
-                                            else
-                                            {
-                                                // too short to be useful
-                                                Logger.Verbose($"NapLodController path too short ({Path.Length}), skipping");
-                                                continue;
-                                            }
-
-                                            trimmed = trimmed?.Trim();
-                                            if (string.IsNullOrEmpty(trimmed))
-                                                continue;
-
-                                            // ensure ".mesh" exists before taking substring
-                                            int meshIndex = trimmed.IndexOf(".mesh", StringComparison.OrdinalIgnoreCase);
-                                            if (meshIndex <= 0)
-                                            {
-                                                Logger.Verbose($".mesh not found in '{trimmed}', skipping");
-                                                continue;
-                                            }
-
-                                            trimmed = trimmed.Substring(0, meshIndex);
-
-                                            // safely get last token after '/', if present
-                                            int lastSlash = trimmed.LastIndexOf('/');
-                                            if (lastSlash >= 0 && lastSlash < trimmed.Length - 1)
-                                                trimmed = trimmed.Substring(lastSlash + 1);
-
-                                            trimmed = trimmed.Trim();
-                                            if (string.IsNullOrEmpty(trimmed))
-                                                continue;
-
-
-                                            if (separateMeshes.TryGetValue(trimmed, out var meshPPtr))
-                                            {
-                                                Logger.Verbose($"Trying to attach {trimmed} to {childName}");
-                                                if (childGO.m_SkinnedMeshRenderer != null && childGO.m_SkinnedMeshRenderer.m_Mesh.IsNull)
-                                                {
-                                                    Logger.Info($"Attached {trimmed} to {childName}");
-                                                    childGO.m_SkinnedMeshRenderer.m_Mesh = meshPPtr;
-                                                }
-                                                else if (childGO.m_MeshFilter != null && childGO.m_MeshFilter.m_Mesh.IsNull)
-                                                {
-                                                    Logger.Info($"Attached {trimmed} to {childName}");
-                                                    childGO.m_MeshFilter.m_Mesh = meshPPtr;
-                                                }
-                                            }
-                                            else if (separateMeshes.TryGetValue(childName, out meshPPtr))
-                                            {
-                                                Logger.Verbose($"Trying to attach {childName} to {childName}");
-                                                if (childGO.m_SkinnedMeshRenderer != null && childGO.m_SkinnedMeshRenderer.m_Mesh.IsNull)
-                                                {
-                                                    Logger.Info($"Attached {childName} to {childName}");
-                                                    childGO.m_SkinnedMeshRenderer.m_Mesh = meshPPtr;
-                                                }
-                                                else if (childGO.m_MeshFilter != null && childGO.m_MeshFilter.m_Mesh.IsNull)
-                                                {
-                                                    Logger.Info($"Attached {childName} to {childName}");
-                                                    childGO.m_MeshFilter.m_Mesh = meshPPtr;
-                                                }
-                                            }
-
-                                        }
-                                    }
-                                }
+                                attachedBy[strategy]++;
+                                attached = true;
+                                break;
                             }
+                        }
+
+                        // Only count renderers that are still missing a mesh. A child whose mesh
+                        // was already assigned needs no separate mesh and is not a failure.
+                        if (!attached
+                            && ((childGO.m_SkinnedMeshRenderer != null && childGO.m_SkinnedMeshRenderer.m_Mesh.IsNull)
+                                || (childGO.m_MeshFilter != null && childGO.m_MeshFilter.m_Mesh.IsNull)))
+                        {
+                            unattached++;
                         }
                     }
                 }
+
+                Logger.Info($"SeparateMesh attached: {attachedBy[0]} via NapLodController, {attachedBy[1]} via name scheme, {attachedBy[2]} via child name; {unattached} renderers left without a mesh");
             }
+        }
+
+        /// <summary>
+        /// Mesh names to try for a child of a ZZZ avatar, most specific first, each tagged with
+        /// the strategy that produced it (0 = NapLodController, 1 = name scheme, 2 = child name).
+        /// </summary>
+        private static IEnumerable<(string Name, int Strategy)> SeparateMeshCandidates(GameObject childGO, string rootName)
+        {
+            var childName = childGO.Name;
+
+            foreach (var component in childGO.m_Components)
+            {
+                if (!component.TryGet<MonoBehaviour>(out var comp) || comp.Name != "NapLodController")
+                {
+                    continue;
+                }
+
+                var name = MeshNameFromNapLodController(comp);
+                if (!string.IsNullOrEmpty(name))
+                {
+                    yield return (name, 0);
+                }
+            }
+
+            yield return ("SeparateMesh_" + rootName + "_" + childName, 1);
+            yield return (childName, 2);
+        }
+
+        /// <summary>
+        /// Extracts the mesh name out of a NapLodController's raw asset path.
+        /// Returns null when the component does not carry a usable path.
+        /// </summary>
+        private static string MeshNameFromNapLodController(MonoBehaviour comp)
+        {
+            var raw = comp.GetRawData();
+            var path = raw != null ? System.Text.Encoding.UTF8.GetString(raw) : string.Empty;
+            if (string.IsNullOrEmpty(path))
+            {
+                return null;
+            }
+
+            var assetIndex = path.IndexOf("Assets", StringComparison.Ordinal);
+            string trimmed;
+            if (assetIndex != -1)
+            {
+                trimmed = path.Substring(assetIndex);
+            }
+            else if (path.Length > 40)
+            {
+                trimmed = path.Substring(40);
+            }
+            else
+            {
+                Logger.Verbose($"NapLodController path too short ({path.Length}), skipping");
+                return null;
+            }
+
+            trimmed = trimmed?.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                return null;
+            }
+
+            var meshIndex = trimmed.IndexOf(".mesh", StringComparison.OrdinalIgnoreCase);
+            if (meshIndex <= 0)
+            {
+                Logger.Verbose($".mesh not found in '{trimmed}', skipping");
+                return null;
+            }
+
+            trimmed = trimmed.Substring(0, meshIndex);
+
+            var lastSlash = trimmed.LastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < trimmed.Length - 1)
+            {
+                trimmed = trimmed.Substring(lastSlash + 1);
+            }
+
+            trimmed = trimmed.Trim();
+            return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        }
+
+        /// <summary>
+        /// Attaches a separate mesh to the child's renderer if one is registered under that name
+        /// and the renderer has no mesh yet. Returns whether an attachment happened.
+        /// </summary>
+        private static bool TryAttachSeparateMesh(GameObject childGO, string meshName, Dictionary<string, PPtr<Mesh>> separateMeshes)
+        {
+            if (string.IsNullOrEmpty(meshName) || !separateMeshes.TryGetValue(meshName, out var meshPPtr))
+            {
+                return false;
+            }
+
+            Logger.Verbose($"Trying to attach {meshName} to {childGO.Name}");
+
+            if (childGO.m_SkinnedMeshRenderer != null && childGO.m_SkinnedMeshRenderer.m_Mesh.IsNull)
+            {
+                Logger.Info($"Attached {meshName} to {childGO.Name}");
+                childGO.m_SkinnedMeshRenderer.m_Mesh = meshPPtr;
+                return true;
+            }
+
+            if (childGO.m_MeshFilter != null && childGO.m_MeshFilter.m_Mesh.IsNull)
+            {
+                Logger.Info($"Attached {meshName} to {childGO.Name}");
+                childGO.m_MeshFilter.m_Mesh = meshPPtr;
+                return true;
+            }
+
+            return false;
         }
     }
 }

@@ -385,10 +385,10 @@ namespace AnimeStudio.GUI
                                                 }
                                                 try
                                                 {
-                                                    containers.Add((m_AssetBundle.m_PreloadTable[k], m_Container.Key));
+                                                    containers.Add((m_AssetBundle.m_PreloadTable[k], containerName));
                                                 } catch
                                                 {
-                                                    Logger.Info($"Failed to add container {m_Container.Key}");
+                                                    Logger.Info($"Failed to add container {containerName}");
                                                 }
                                             }
                                             break;
@@ -491,7 +491,7 @@ namespace AnimeStudio.GUI
                 tmp.SetSubItems();
             }
 
-            visibleAssets = exportableAssets;
+            visibleAssets = new List<AssetItem>(exportableAssets);
 
             StatusStripUpdate("Building tree structure...");
 

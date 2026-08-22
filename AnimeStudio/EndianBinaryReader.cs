@@ -114,6 +114,13 @@ namespace AnimeStudio
             {
                 return Array.Empty<byte>();
             }
+            // A negative or oversized count always means the stream position is wrong (bad
+            // length field, misaligned object). Fail here with the offset instead of deeper
+            // down in `new byte[negative]` (OverflowException) or a silent short read.
+            if (count < 0 || count > Remaining)
+            {
+                throw new EndOfStreamException($"Invalid read of {count} bytes at position 0x{Position:X} ({Position}), only {Remaining} bytes remaining (stream length {Length})");
+            }
 
             // Single destination buffer — avoids List growth + final ToArray copy that
             // previously doubled peak memory for large reads (object hashing, etc.).
@@ -238,6 +245,12 @@ namespace AnimeStudio
 
         internal T[] ReadArray<T>(Func<T> del, int length)
         {
+            // Same reasoning as ReadBytes: every element needs at least one byte, so a length
+            // above the remaining stream size (or a negative one) is a bad offset, not data.
+            if (length < 0 || length > Remaining)
+            {
+                throw new EndOfStreamException($"Invalid array length {length} at position 0x{Position:X} ({Position}), only {Remaining} bytes remaining (stream length {Length})");
+            }
             if (length < 0x1000)
             {
                 var array = new T[length];

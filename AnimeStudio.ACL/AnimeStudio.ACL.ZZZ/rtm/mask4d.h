@@ -26,6 +26,7 @@
 
 #include "rtm/math.h"
 #include "rtm/version.h"
+#include "rtm/impl/bit_cast.impl.h"
 #include "rtm/impl/compiler_utils.h"
 #include "rtm/impl/mask_common.h"
 
@@ -42,14 +43,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns the mask4d [x] component.
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_x(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_x(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 #if defined(RTM_ARCH_X64)
-		return _mm_cvtsi128_si64(_mm_castpd_si128(input.xy));
+		return static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_castpd_si128(input.xy)));
 #else
 		// Just sign extend on 32bit systems
-		return (uint64_t)_mm_cvtsi128_si32(_mm_castpd_si128(input.xy));
+		return static_cast<uint64_t>(_mm_cvtsi128_si32(_mm_castpd_si128(input.xy)));
 #endif
 #else
 		return input.x;
@@ -59,14 +60,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns the mask4d [y] component.
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_y(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_y(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 #if defined(RTM_ARCH_X64)
-		return _mm_cvtsi128_si64(_mm_castpd_si128(_mm_shuffle_pd(input.xy, input.xy, 1)));
+		return static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_castpd_si128(_mm_shuffle_pd(input.xy, input.xy, 1))));
 #else
 		// Just sign extend on 32bit systems
-		return (uint64_t)_mm_cvtsi128_si32(_mm_castpd_si128(_mm_shuffle_pd(input.xy, input.xy, 1)));
+		return static_cast<uint64_t>(_mm_cvtsi128_si32(_mm_castpd_si128(_mm_shuffle_pd(input.xy, input.xy, 1))));
 #endif
 #else
 		return input.y;
@@ -76,14 +77,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns the mask4d [z] component.
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_z(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_z(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 #if defined(RTM_ARCH_X64)
-		return _mm_cvtsi128_si64(_mm_castpd_si128(input.zw));
+		return static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_castpd_si128(input.zw)));
 #else
 		// Just sign extend on 32bit systems
-		return (uint64_t)_mm_cvtsi128_si32(_mm_castpd_si128(input.zw));
+		return static_cast<uint64_t>(_mm_cvtsi128_si32(_mm_castpd_si128(input.zw)));
 #endif
 #else
 		return input.z;
@@ -93,14 +94,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns the mask4d [w] component.
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_w(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE uint64_t RTM_SIMD_CALL mask_get_w(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 #if defined(RTM_ARCH_X64)
-		return _mm_cvtsi128_si64(_mm_castpd_si128(_mm_shuffle_pd(input.zw, input.zw, 1)));
+		return static_cast<uint64_t>(_mm_cvtsi128_si64(_mm_castpd_si128(_mm_shuffle_pd(input.zw, input.zw, 1))));
 #else
 		// Just sign extend on 32bit systems
-		return (uint64_t)_mm_cvtsi128_si32(_mm_castpd_si128(_mm_shuffle_pd(input.zw, input.zw, 1)));
+		return static_cast<uint64_t>(_mm_cvtsi128_si32(_mm_castpd_si128(_mm_shuffle_pd(input.zw, input.zw, 1))));
 #endif
 #else
 		return input.w;
@@ -110,7 +111,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all 4 components are true, otherwise false: all(input.xyzw != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return (_mm_movemask_pd(input.xy) & _mm_movemask_pd(input.zw)) == 3;
@@ -122,7 +123,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all [xy] components are true, otherwise false: all(input.xy != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true2(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true2(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_movemask_pd(input.xy) == 3;
@@ -134,7 +135,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all [xyz] components are true, otherwise false: all(input.xyz != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true3(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_true3(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_movemask_pd(input.xy) == 3 && (_mm_movemask_pd(input.zw) & 1) != 0;
@@ -146,7 +147,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any 4 components are true, otherwise false: any(input.xyzw != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return (_mm_movemask_pd(input.xy) | _mm_movemask_pd(input.zw)) != 0;
@@ -158,7 +159,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any [xy] components are true, otherwise false: any(input.xy != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true2(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true2(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_movemask_pd(input.xy) != 0;
@@ -170,7 +171,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any [xyz] components are true, otherwise false: any(input.xyz != 0)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true3(const mask4d& input) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_true3(mask4d_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_movemask_pd(input.xy) != 0 || (_mm_movemask_pd(input.zw) & 1) != 0;
@@ -182,7 +183,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all 4 components are equal, otherwise false: all(lhs.xyzw == rhs.xyzw)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -205,7 +206,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all [xy] components are equal, otherwise false: all(lhs.xy == rhs.xy)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal2(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal2(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -224,7 +225,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all [xyz] components are equal, otherwise false: all(lhs.xyz == rhs.xyz)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal3(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_all_equal3(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -247,7 +248,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any 4 components are equal, otherwise false: any(lhs.xyzw == rhs.xyzw)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -273,7 +274,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any [xy] components are equal, otherwise false: any(lhs.xy == rhs.xy)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal2(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal2(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -293,7 +294,7 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Returns true if any [xyz] components are equal, otherwise false: any(lhs.xyz == rhs.xyz)
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal3(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL mask_any_equal3(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 		// Cannot use == and != with NaN floats
 #if defined(RTM_SSE2_INTRINSICS)
@@ -318,15 +319,15 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Per component logical AND between the inputs: lhs & rhs
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d mask_and(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d RTM_SIMD_CALL mask_and(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		__m128d xy = _mm_and_pd(lhs.xy, rhs.xy);
 		__m128d zw = _mm_and_pd(lhs.zw, rhs.zw);
 		return mask4d{ xy, zw };
 #else
-		const uint64_t* lhs_ = reinterpret_cast<const uint64_t*>(&lhs);
-		const uint64_t* rhs_ = reinterpret_cast<const uint64_t*>(&rhs);
+		const uint64_t* lhs_ = rtm_impl::bit_cast<const uint64_t*>(&lhs);
+		const uint64_t* rhs_ = rtm_impl::bit_cast<const uint64_t*>(&rhs);
 
 		union
 		{
@@ -346,15 +347,15 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Per component logical OR between the inputs: lhs | rhs
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d mask_or(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d RTM_SIMD_CALL mask_or(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		__m128d xy = _mm_or_pd(lhs.xy, rhs.xy);
 		__m128d zw = _mm_or_pd(lhs.zw, rhs.zw);
 		return mask4d{ xy, zw };
 #else
-		const uint64_t* lhs_ = reinterpret_cast<const uint64_t*>(&lhs);
-		const uint64_t* rhs_ = reinterpret_cast<const uint64_t*>(&rhs);
+		const uint64_t* lhs_ = rtm_impl::bit_cast<const uint64_t*>(&lhs);
+		const uint64_t* rhs_ = rtm_impl::bit_cast<const uint64_t*>(&rhs);
 
 		union
 		{
@@ -374,15 +375,15 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	// Per component logical XOR between the inputs: lhs ^ rhs
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d mask_xor(const mask4d& lhs, const mask4d& rhs) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4d RTM_SIMD_CALL mask_xor(mask4d_arg0 lhs, mask4d_arg1 rhs) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
 		__m128d xy = _mm_xor_pd(lhs.xy, rhs.xy);
 		__m128d zw = _mm_xor_pd(lhs.zw, rhs.zw);
 		return mask4d{ xy, zw };
 #else
-		const uint64_t* lhs_ = reinterpret_cast<const uint64_t*>(&lhs);
-		const uint64_t* rhs_ = reinterpret_cast<const uint64_t*>(&rhs);
+		const uint64_t* lhs_ = rtm_impl::bit_cast<const uint64_t*>(&lhs);
+		const uint64_t* rhs_ = rtm_impl::bit_cast<const uint64_t*>(&rhs);
 
 		union
 		{

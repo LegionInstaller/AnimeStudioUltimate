@@ -20,7 +20,23 @@
 //OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 //SOFTWARE.
 
+// The vendored acl/ tree here is the HoYo-patched acl 2.1.0 (compressed_tracks_version16::vHoYo).
+// It is the only one of the three vendored trees that can decode ZZZ clips; the stock decoder
+// rejects them in is_valid() with "Invalid algorithm version".
+//
+// ZZZ splits its clip data into two independently compressed_tracks blobs -- transform tracks
+// (qvvf) followed by scalar tracks (float1f) -- so the entry point takes them separately rather
+// than walking a single buffer.
+
 #include "dllmain.h"
+
+#include <cstring>
+#include <exception>
+#include <cstdio>
+
+#define RTM_NO_DEPRECATION
+#define ACL_ON_ASSERT_THROW
+#define RTM_ON_ASSERT_THROW
 
 #include <acl/core/iallocator.h>
 #include <acl/core/ansi_allocator.h>
@@ -28,73 +44,113 @@
 #include <acl/core/compressed_database.h>
 
 #include <acl/decompression/decompress.h>
+#include <acl/decompression/decompression_settings.h>
 #include <acl/decompression/database/database.h>
+#include <acl/decompression/database/database_settings.h>
+#include <acl/decompression/database/database_streamer.h>
 #include <acl/decompression/database/null_database_streamer.h>
-#include <acl/decompression/database/impl/debug_database_streamer.h>
-
-#include <acl/compression/track_array.h>
 
 using namespace acl;
 
-struct acl_writer : public track_writer
+namespace
 {
-	acl_writer(float* values)
-		: m_values(values)
+	// Every vendored tree aliases `latest` to its own HoYo version constant (100), so this
+	// stays correct if the tree is ever swapped again.
+	// acl static_asserts that the database settings and the decompression settings agree on
+	// version_supported(), and one database_context has to serve both the transform and the
+	// scalar context, so all three use `any` and dispatch on the version in the blob header.
+	struct hoyo_database_settings : public default_database_settings
 	{
-		m_sample_index = 0;
-		m_num_tracks = 0;
-		m_num_constant_tracks = 0;
-	}
+		static constexpr compressed_tracks_version16 version_supported() { return compressed_tracks_version16::any; }
+	};
 
-	void RTM_SIMD_CALL write_rotation(uint32_t track_index, rtm::quatf_arg0 rotation)
+	// ZZZ's two blobs are NOT both HoYo-versioned. Observed on live data (Avatar_*_Ani_*):
+	//   transform blob: version 8 (v02_01_99), track_type 12 (qvvf)  -> stock decoder
+	//   scalar blob:    version 100 (vHoYo),   track_type 0 (float1f) -> HoYo decoder
+	// That matches acl's own context selector, which routes <transform, hoyo> to the stock
+	// transform context and only <scalar, hoyo> to the patched HoYo context.
+	struct hoyo_transform_decompression_settings : public default_transform_decompression_settings
 	{
-		uint32_t index = calculate_qvvf_index(track_index);
+		using database_settings_type = hoyo_database_settings;
+		// Accept both stock and HoYo versions rather than pinning one.
+		static constexpr compressed_tracks_version16 version_supported() { return compressed_tracks_version16::any; }
+	};
 
-		rtm::quat_store(rotation, &m_values[index]);
-	}
-
-	void RTM_SIMD_CALL write_translation(uint32_t track_index, rtm::vector4f_arg0 translation)
+	struct hoyo_scalar_decompression_settings : public default_hoyo_scalar_decompression_settings
 	{
-		uint32_t index = calculate_qvvf_index(track_index);
+		using database_settings_type = hoyo_database_settings;
+		// is_hoyo() stays inherited (true), so this still selects the patched HoYo scalar context;
+		// only the version dispatch is widened to match hoyo_database_settings.
+		static constexpr compressed_tracks_version16 version_supported() { return compressed_tracks_version16::any; }
+		// The stock safety checks cast the header to a transform_track header and trip on scalar
+		// clips. The tracks themselves are validated by make_compressed_tracks() before we get here.
+		static constexpr bool skip_initialize_safety_checks() { return true; }
+	};
 
-		rtm::vector_store3(translation, &m_values[index + 4]);
-	}
+	// One frame is num_transform_tracks * QVVF_STRIDE floats followed by num_scalar_tracks floats.
+	constexpr uint32_t QVVF_STRIDE = 10;
 
-	void RTM_SIMD_CALL write_scale(uint32_t track_index, rtm::vector4f_arg0 scale)
+	// Writes into the flat float buffer the managed side unpacks. Transform tracks occupy
+	// [0, 10*T) of each frame, scalar tracks [10*T, 10*T + S).
+	struct acl_writer : public track_writer
 	{
-		uint32_t index = calculate_qvvf_index(track_index);
+		acl_writer(float* values, uint32_t num_transform_tracks, uint32_t num_scalar_tracks)
+			: m_values(values)
+			, m_num_transform_tracks(num_transform_tracks)
+			, m_num_scalar_tracks(num_scalar_tracks)
+			, m_frame(0)
+		{
+		}
 
-		rtm::vector_store3(scale, &m_values[index + 7]);
-	}
+		void set_frame(uint32_t frame) { m_frame = frame; }
 
-	void RTM_SIMD_CALL write_float1(uint32_t track_index, rtm::scalarf_arg0 value)
-	{
-		uint32_t index = calculate_float1f_index(track_index);
+		RTM_FORCE_INLINE void RTM_SIMD_CALL write_rotation(uint32_t track_index, rtm::quatf_arg0 rotation)
+		{
+			rtm::quat_store(rotation, &frame_base()[track_index * QVVF_STRIDE]);
+		}
 
-		rtm::vector_store1(value.value, &m_values[index]);
-	}
+		RTM_FORCE_INLINE void RTM_SIMD_CALL write_translation(uint32_t track_index, rtm::vector4f_arg0 translation)
+		{
+			rtm::vector_store3(translation, &frame_base()[track_index * QVVF_STRIDE + 4]);
+		}
 
-	uint32_t m_sample_index;
-	uint32_t m_num_tracks;
-	uint32_t m_num_constant_tracks;
-	float* m_values;
+		RTM_FORCE_INLINE void RTM_SIMD_CALL write_scale(uint32_t track_index, rtm::vector4f_arg0 scale)
+		{
+			rtm::vector_store3(scale, &frame_base()[track_index * QVVF_STRIDE + 7]);
+		}
 
-	constexpr uint32_t calculate_qvvf_index(uint16_t track_index) { return m_sample_index * calculate_qvvf_size(m_num_tracks) + m_sample_index * calculate_float1f_size(m_num_constant_tracks) + calculate_qvvf_size(track_index); }
-	constexpr uint32_t calculate_float1f_index(uint16_t track_index) { return (m_sample_index + 1) * calculate_qvvf_size(m_num_tracks) + m_sample_index * calculate_float1f_size(m_num_constant_tracks) + track_index; }
+		RTM_FORCE_INLINE void RTM_SIMD_CALL write_float1(uint32_t track_index, rtm::scalarf_arg0 value)
+		{
+			// Scalar tracks start after the transform block of the same frame. Omitting this
+			// offset overwrites the first transform track of every frame.
+			rtm::scalar_store(value, &frame_base()[QVVF_STRIDE * m_num_transform_tracks + track_index]);
+		}
 
-	constexpr static uint32_t calculate_qvvf_size(uint16_t num_track) { return num_track * 0xA; }
-	constexpr static uint32_t calculate_float1f_size(uint16_t num_track) { return num_track; }
-};
+	private:
+		float* frame_base() const { return m_values + frame_stride() * m_frame; }
+		uint32_t frame_stride() const { return QVVF_STRIDE * m_num_transform_tracks + m_num_scalar_tracks; }
 
-struct database_transform_decompression_settings : public default_transform_decompression_settings
+		float* m_values;
+		uint32_t m_num_transform_tracks;
+		uint32_t m_num_scalar_tracks;
+		uint32_t m_frame;
+	};
+
+	acl::ansi_allocator Allocator;
+}
+
+// Message from the last failed decompression on this thread; read back via GetLastDecompressError.
+static thread_local char g_last_error[512];
+static thread_local char g_last_info[512];
+
+
+static void set_last_error(const char* message)
 {
-	using database_settings_type = default_database_settings;
-};
-
-struct database_scalar_decompression_settings : public default_scalar_decompression_settings
-{
-	using database_settings_type = default_database_settings;
-};
+	if (message == nullptr)
+		message = "unknown native exception";
+	std::strncpy(g_last_error, message, sizeof(g_last_error) - 1);
+	g_last_error[sizeof(g_last_error) - 1] = '\0';
+}
 
 struct decompressed_clip
 {
@@ -104,122 +160,314 @@ struct decompressed_clip
 	int times_count;
 };
 
-static acl::ansi_allocator Allocator;
-
-AS_API(void) DecompressTracks(void* data, void* database, void* streamer, decompressed_clip& decompressed_clip)
+// transform_data / scalar_data / database_data / bulk_data are raw 16-byte-aligned buffers or null.
+// bulk_data may be null even when database_data is present: GI concatenates the streamed bulk data
+// directly behind the database blob, so we derive the pointer in that case.
+// Parses a compressed_tracks blob and rejects it unless it fits entirely inside the buffer we
+// were given. acl trusts the size field in the header, so a truncated or inconsistent blob
+// otherwise reads past the allocation and takes the process down with an access violation --
+// a C++ try/catch cannot recover from that, which is why the check has to happen up front.
+static compressed_tracks* parse_tracks(void* data, int size, const char* what)
 {
-	error_result database_error, tracks_error, transform_error, scalar_error;
-	compressed_tracks* transform_compressed_tracks = nullptr;
-	compressed_tracks* scalar_compressed_tracks = nullptr;
+	if (data == nullptr || size <= 0)
+		return nullptr;
 
-	auto databasse_context = allocate_type<database_context<default_database_settings>>(Allocator);
-	auto transform_context = make_decompression_context<database_transform_decompression_settings>(Allocator);
-	auto scalar_context = make_decompression_context<database_scalar_decompression_settings>(Allocator);
+	error_result err;
+	compressed_tracks* tracks = make_compressed_tracks(data, &err);
+	if (!err.empty() || tracks == nullptr)
+		return nullptr;
 
-	auto compressed_database = make_compressed_database(database, &database_error);
-
-	if (database_error.empty())
+	if (tracks->get_size() > static_cast<uint32_t>(size))
 	{
-		const uint8_t* medium_bulk_data = (const uint8_t*)streamer;
-		const uint8_t* low_bulk_data = (const uint8_t*)add_offset_to_ptr<void>(streamer, align_to(compressed_database->get_bulk_data_size(quality_tier::medium_importance), 4));
-
-		debug_database_streamer* medium_database_streamer = new debug_database_streamer(Allocator, medium_bulk_data, compressed_database->get_bulk_data_size(quality_tier::medium_importance));
-		debug_database_streamer* low_database_streamer = new debug_database_streamer(Allocator, low_bulk_data, compressed_database->get_bulk_data_size(quality_tier::lowest_importance));
-
-		databasse_context->initialize(Allocator, *compressed_database, *medium_database_streamer, *low_database_streamer);
-		databasse_context->stream_in(quality_tier::medium_importance);
-		databasse_context->stream_in(quality_tier::lowest_importance);
+		std::snprintf(g_last_error, sizeof(g_last_error),
+			"%s blob declares %u bytes but only %d were provided", what, tracks->get_size(), size);
+		return nullptr;
 	}
 
-	auto compressed_track = make_compressed_tracks(data, &tracks_error);
-
-	if (tracks_error.empty())
-	{
-		decompressed_clip.times_count = 0;
-		decompressed_clip.values_count = 0;
-
-		if (compressed_track->get_track_type() == track_type8::qvvf) 
-		{
-			transform_error = tracks_error;
-			transform_compressed_tracks = compressed_track;
-
-			if (databasse_context->is_initialized())
-			{
-				transform_context->initialize(*transform_compressed_tracks, *databasse_context);
-			}
-			else
-			{
-				transform_context->initialize(*transform_compressed_tracks);
-			}
-
-			decompressed_clip.times_count += transform_compressed_tracks->get_num_samples_per_track();
-			decompressed_clip.values_count += transform_compressed_tracks->get_num_samples_per_track() * acl_writer::calculate_qvvf_size(transform_compressed_tracks->get_num_tracks());
-
-			data = add_offset_to_ptr<void>(data, align_to(transform_compressed_tracks->get_size(), alignof(compressed_tracks)));
-			compressed_track = make_compressed_tracks(data, &tracks_error);
-		}
-
-		scalar_error = tracks_error;
-		scalar_compressed_tracks = compressed_track;
-
-		if (scalar_error.empty())
-		{
-			if (databasse_context->is_initialized())
-			{
-				scalar_context->initialize(*scalar_compressed_tracks, *databasse_context);
-			}
-			else
-			{
-				scalar_context->initialize(*scalar_compressed_tracks);
-			}
-
-			decompressed_clip.times_count += decompressed_clip.times_count != 0 ? 0 : scalar_compressed_tracks->get_num_samples_per_track();
-			decompressed_clip.values_count += scalar_compressed_tracks->get_num_samples_per_track() * acl_writer::calculate_float1f_size(scalar_compressed_tracks->get_num_tracks());
-		}
-
-		if (transform_context->is_initialized() || scalar_context->is_initialized())
-		{
-			decompressed_clip.times = allocate_type_array<float>(Allocator, decompressed_clip.times_count);
-			decompressed_clip.values = allocate_type_array<float>(Allocator, decompressed_clip.values_count);
-
-			float step = 0;
-			acl_writer writer(decompressed_clip.values);
-
-			if(transform_error.empty() && transform_compressed_tracks != nullptr)
-			{
-				writer.m_num_tracks = transform_compressed_tracks->get_num_tracks();
-				step = rtm::scalar_reciprocal(transform_compressed_tracks->get_sample_rate());
-			}
-			if (scalar_error.empty() && scalar_compressed_tracks != nullptr)
-			{
-				writer.m_num_constant_tracks = scalar_compressed_tracks->get_num_tracks();
-				step = rtm::scalar_reciprocal(scalar_compressed_tracks->get_sample_rate());
-			}
-			for (int32_t sample_index = 0; sample_index < decompressed_clip.times_count; ++sample_index)
-			{
-				const float sample_time = sample_index * step;
-
-				decompressed_clip.times[sample_index] = sample_time;
-
-				writer.m_sample_index = sample_index;
-				if (transform_error.empty())
-				{
-					transform_context->seek(sample_time, sample_rounding_policy::none);
-					transform_context->decompress_tracks(writer);
-				}
-				if (scalar_error.empty())
-				{
-					scalar_context->seek(sample_time, sample_rounding_policy::none);
-					scalar_context->decompress_tracks(writer);
-				}
-			}
-		}
-	}
-
-	deallocate_type(Allocator, databasse_context);
+	return tracks;
 }
 
-AS_API(void) Dispose(decompressed_clip& decompressed_clip) {
-	deallocate_type_array<float>(Allocator, decompressed_clip.times, decompressed_clip.times_count);
-	deallocate_type_array<float>(Allocator, decompressed_clip.values, decompressed_clip.values_count);
+static void decompress_zzz(void* transform_data, int transform_size, void* scalar_data, int scalar_size,
+	void* database_data, int database_size, void* bulk_data, int bulk_size, decompressed_clip& out)
+{
+	out.values = nullptr;
+	out.values_count = 0;
+	out.times = nullptr;
+	out.times_count = 0;
+
+	compressed_tracks* transform_tracks = parse_tracks(transform_data, transform_size, "transform");
+	compressed_tracks* scalar_tracks = parse_tracks(scalar_data, scalar_size, "scalar");
+
+	if (transform_tracks == nullptr && scalar_tracks == nullptr)
+		return;
+
+	const compressed_database* database = nullptr;
+	if (database_data != nullptr && database_size > 0)
+	{
+		error_result err;
+		database = make_compressed_database(database_data, &err);
+		if (!err.empty())
+			database = nullptr;
+		else if (database != nullptr && database->get_size() > static_cast<uint32_t>(database_size))
+		{
+			std::snprintf(g_last_error, sizeof(g_last_error),
+				"database declares %u bytes but only %d were provided", database->get_size(), database_size);
+			database = nullptr;
+		}
+	}
+
+	// Resolve the bulk data layout before constructing the streamers, so they can be declared
+	// at function scope -- the database context keeps references to them and outlives any
+	// narrower scope we would otherwise put them in.
+	const bool inline_bulk = database != nullptr && database->is_bulk_data_inline();
+	const uint8_t* bulk = nullptr;
+	uint32_t medium_size = 0;
+	uint32_t low_size = 0;
+
+	if (database != nullptr && !inline_bulk)
+	{
+		int available = bulk_size;
+		bulk = static_cast<const uint8_t*>(bulk_data);
+		if (bulk == nullptr || available <= 0)
+		{
+			// GI appends the bulk data directly behind the database blob rather than passing
+			// it separately, so derive the pointer from the database size.
+			bulk = add_offset_to_ptr<const uint8_t>(database_data, database->get_size());
+			available = database_size - static_cast<int>(database->get_size());
+		}
+
+		medium_size = database->get_bulk_data_size(quality_tier::medium_importance);
+		low_size = database->get_bulk_data_size(quality_tier::lowest_importance);
+
+		// The header can claim more bulk data than the clip actually carries. Streaming that in
+		// reads past the buffer, so drop the database instead and decode what is inline.
+		const uint64_t needed = static_cast<uint64_t>(align_to(medium_size, 4)) + low_size;
+		if (available <= 0 || needed > static_cast<uint64_t>(available))
+		{
+			std::snprintf(g_last_error, sizeof(g_last_error),
+				"database bulk needs %llu bytes (medium %u + low %u) but only %d are available; decoding without it",
+				static_cast<unsigned long long>(needed), medium_size, low_size, available);
+			bulk = nullptr;
+			medium_size = 0;
+			low_size = 0;
+		}
+	}
+
+	// A stripped database with nothing to stream is unusable; decode without it rather than
+	// feeding the context an empty streamer.
+	const bool use_streamed_database = bulk != nullptr && (medium_size != 0 || low_size != 0);
+
+	// null_database_streamer asserts on a null buffer in its constructor even for a zero-sized
+	// tier (unlike its own is_initialized(), which tolerates it), so both tiers always get the
+	// base pointer. ZZZ ships a single tier; when both exist they are concatenated, medium first.
+	const uint8_t* safe_bulk = bulk != nullptr ? bulk : reinterpret_cast<const uint8_t*>(&medium_size);
+	std::snprintf(g_last_info, sizeof(g_last_info),
+		"inline=%d medium=%u low=%u dbSize=%u bulkGiven=%d tTracks=%u tSamples=%u tHasDb=%d sTracks=%u sSamples=%u sHasDb=%d",
+		inline_bulk ? 1 : 0, medium_size, low_size,
+		database != nullptr ? database->get_size() : 0u,
+		bulk_data != nullptr ? 1 : 0,
+		transform_tracks != nullptr ? transform_tracks->get_num_tracks() : 0u,
+		transform_tracks != nullptr ? transform_tracks->get_num_samples_per_track() : 0u,
+		transform_tracks != nullptr && transform_tracks->has_database() ? 1 : 0,
+		scalar_tracks != nullptr ? scalar_tracks->get_num_tracks() : 0u,
+		scalar_tracks != nullptr ? scalar_tracks->get_num_samples_per_track() : 0u,
+		scalar_tracks != nullptr && scalar_tracks->has_database() ? 1 : 0);
+
+	null_database_streamer medium_streamer(safe_bulk, medium_size);
+	null_database_streamer low_streamer(medium_size != 0 ? safe_bulk + align_to(medium_size, 4) : safe_bulk, low_size);
+	database_context<hoyo_database_settings> database_ctx;
+
+	if (inline_bulk)
+	{
+		database_ctx.initialize(Allocator, *database);
+	}
+	else if (use_streamed_database)
+	{
+		database_ctx.initialize(Allocator, *database, medium_streamer, low_streamer);
+		if (medium_size != 0)
+			database_ctx.stream_in(quality_tier::medium_importance);
+		if (low_size != 0)
+			database_ctx.stream_in(quality_tier::lowest_importance);
+	}
+
+	decompression_context<hoyo_transform_decompression_settings> transform_ctx;
+	if (transform_tracks != nullptr)
+	{
+		if (transform_tracks->has_database() && database_ctx.is_initialized())
+			transform_ctx.initialize(*transform_tracks, database_ctx);
+		else
+			transform_ctx.initialize(*transform_tracks);
+	}
+
+	// Database-backed scalar tracks stay OFF.
+	//
+	// The database branch in decompression.hoyo.h is implemented far enough that the *variable*
+	// tracks decode correctly -- verified value for value against the classic streamed/constant
+	// variant of the same clips (8 clips, 2 characters, 70 tracks, worst error 9.8e-4, which is
+	// just the 13/14-bit quantisation). What is NOT solved is how the constant and default tracks
+	// index into database_constant_values: the first eight line up with the track index and then
+	// the mapping drifts, and tracks flagged "default" turn out to carry non-zero values.
+	//
+	// Enabling it in that state would emit correct animated curves next to silently wrong constant
+	// ones, which is worse than emitting nothing. Facial animation therefore stays missing rather
+	// than wrong. See docs/TESTBERICHT-ZZZ.md for the full layout and the open question.
+	const bool scalar_supported = scalar_tracks != nullptr && !scalar_tracks->has_database();
+
+	decompression_context<hoyo_scalar_decompression_settings> scalar_ctx;
+	if (scalar_supported)
+	{
+		scalar_ctx.initialize(*scalar_tracks);
+	}
+	else if (scalar_tracks != nullptr)
+	{
+		std::snprintf(g_last_error, sizeof(g_last_error),
+			"scalar tracks are database-backed; constant-track mapping is not solved yet, decoding transform tracks only");
+	}
+
+	float step = 0.0f;
+	uint32_t num_transform_tracks = 0;
+	uint32_t num_scalar_tracks = 0;
+
+	if (transform_ctx.is_initialized())
+	{
+		const uint32_t num_samples = transform_tracks->get_num_samples_per_track();
+		num_transform_tracks = transform_tracks->get_num_tracks();
+		out.times_count += static_cast<int>(num_samples);
+		out.values_count += static_cast<int>(QVVF_STRIDE * num_samples * num_transform_tracks);
+		step = rtm::scalar_reciprocal(transform_tracks->get_sample_rate());
+	}
+
+	// The scalar region is reserved even when it cannot be decoded. The managed converters index
+	// the buffer as frameIndex * m_CurveCount, and m_CurveCount comes from the clip, not from what
+	// was decoded -- dropping the region would shift every frame after the first and read past the
+	// end. Leaving it zero-filled keeps the layout intact and only loses the float curves.
+	if (scalar_tracks != nullptr)
+	{
+		const uint32_t num_samples = scalar_tracks->get_num_samples_per_track();
+		num_scalar_tracks = scalar_tracks->get_num_tracks();
+		if (out.times_count == 0)
+			out.times_count = static_cast<int>(num_samples);
+		out.values_count += static_cast<int>(num_samples * num_scalar_tracks);
+		if (step == 0.0f)
+			step = rtm::scalar_reciprocal(scalar_tracks->get_sample_rate());
+	}
+
+	if (out.times_count <= 0 || out.values_count <= 0)
+	{
+		out.times_count = 0;
+		out.values_count = 0;
+		return;
+	}
+
+	out.times = allocate_type_array<float>(Allocator, out.times_count);
+	out.values = allocate_type_array<float>(Allocator, out.values_count);
+	std::memset(out.values, 0, sizeof(float) * static_cast<size_t>(out.values_count));
+
+	acl_writer writer(out.values, num_transform_tracks, num_scalar_tracks);
+
+	for (int sample_index = 0; sample_index < out.times_count; ++sample_index)
+		out.times[sample_index] = sample_index * step;
+
+	// Transform and scalar tracks are decoded in separate passes with independent error handling.
+	// They occupy disjoint regions of every frame, so a scalar track that the decoder rejects
+	// still leaves a fully usable transform animation behind instead of discarding the clip.
+	if (transform_ctx.is_initialized())
+	{
+		try
+		{
+			for (int sample_index = 0; sample_index < out.times_count; ++sample_index)
+			{
+				writer.set_frame(static_cast<uint32_t>(sample_index));
+				transform_ctx.seek(out.times[sample_index], sample_rounding_policy::none);
+				transform_ctx.decompress_tracks(writer);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			set_last_error(e.what());
+			std::strncat(g_last_error, " [transform pass]", sizeof(g_last_error) - std::strlen(g_last_error) - 1);
+		}
+	}
+
+	if (scalar_ctx.is_initialized())
+	{
+		try
+		{
+			for (int sample_index = 0; sample_index < out.times_count; ++sample_index)
+			{
+				writer.set_frame(static_cast<uint32_t>(sample_index));
+				scalar_ctx.seek(out.times[sample_index], sample_rounding_policy::none);
+				scalar_ctx.decompress_tracks(writer);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			set_last_error(e.what());
+			std::strncat(g_last_error, " [scalar pass]", sizeof(g_last_error) - std::strlen(g_last_error) - 1);
+		}
+	}
+}
+
+// acl's checks are compiled as ACL_ON_ASSERT_THROW rather than the usual abort, so a malformed
+// clip cannot take the host process down with it. The exception must not cross the C ABI
+// boundary, so it is swallowed here and reported as an empty clip; the managed side logs that.
+AS_API(void) DecompressTracksZZZ(void* transform_data, int transform_size, void* scalar_data, int scalar_size,
+	void* database_data, int database_size, void* bulk_data, int bulk_size, decompressed_clip& out)
+{
+	out.values = nullptr;
+	out.values_count = 0;
+	out.times = nullptr;
+	out.times_count = 0;
+
+	g_last_error[0] = '\0';
+
+	try
+	{
+		decompress_zzz(transform_data, transform_size, scalar_data, scalar_size,
+			database_data, database_size, bulk_data, bulk_size, out);
+		// A per-pass failure inside decompress_zzz is recorded in g_last_error but keeps
+		// whatever the other pass produced, so the clip is returned as-is.
+		return;
+	}
+	catch (const std::exception& e)
+	{
+		set_last_error(e.what());
+	}
+	catch (...)
+	{
+		set_last_error("unknown native exception");
+	}
+
+	// Only reached when the run aborted outright; release anything it had already allocated.
+	if (out.times != nullptr)
+		deallocate_type_array<float>(Allocator, out.times, out.times_count);
+	if (out.values != nullptr)
+		deallocate_type_array<float>(Allocator, out.values, out.values_count);
+
+	out.values = nullptr;
+	out.values_count = 0;
+	out.times = nullptr;
+	out.times_count = 0;
+}
+
+// Returns the message from the last DecompressTracksZZZ call on this thread, or an empty string
+// if it succeeded. Lets the managed side explain an empty clip instead of silently dropping it.
+AS_API(const char*) GetLastDecompressInfo()
+{
+	return g_last_info;
+}
+
+AS_API(const char*) GetLastDecompressError()
+{
+	return g_last_error;
+}
+
+AS_API(void) Dispose(decompressed_clip& out)
+{
+	deallocate_type_array<float>(Allocator, out.times, out.times_count);
+	deallocate_type_array<float>(Allocator, out.values, out.values_count);
+	out.values = nullptr;
+	out.values_count = 0;
+	out.times = nullptr;
+	out.times_count = 0;
 }

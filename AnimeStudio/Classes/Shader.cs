@@ -1233,7 +1233,7 @@ namespace AnimeStudio
         public ShaderPlatformInfos[] platformInfos;
 
         public override string Name => m_ParsedForm?.m_Name ?? m_Name;
-        // public static bool HasPlatformInfos(SerializedType type) => type.Match("D114ED797139152A2E4A42339CF4AA8E"); // Star Rail
+        public static bool HasPlatformInfos(SerializedType type) => type?.m_OldTypeHash != null && type.Match("D114ED797139152A2E4A42339CF4AA8E"); // Star Rail
 
         public Shader(ObjectReader reader) : base(reader)
         {
@@ -1263,7 +1263,9 @@ namespace AnimeStudio
                     reader.AlignStream();
                 }
                 platforms = reader.ReadUInt32Array().Select(x => (ShaderCompilerPlatform)x).ToArray();
-                if (reader.Game.Type.IsSRGroup())
+                //The game preset stays authoritative; the TypeTree hash is only a fallback so that
+                //Star Rail shaders can still be parsed when no (or a wrong) game was selected.
+                if (reader.Game.Type.IsSRGroup() || HasPlatformInfos(reader.serializedType))
                 {
                     int numPlatformInfos = reader.ReadInt32();
                     platformInfos = new ShaderPlatformInfos[numPlatformInfos];

@@ -125,6 +125,7 @@ namespace AnimeStudio.GUI
             assetDataGridView.RowCount = _assetEntries.Count;
             assetDataGridView.Refresh();
 
+            types.Clear();
             foreach (var entry in _assetEntries)
             {
                 if (!types.Contains(entry.Type.ToString()))
@@ -138,6 +139,11 @@ namespace AnimeStudio.GUI
             {
                 types.Insert(0, "All");
             }
+
+            // The visible type list was rebuilt, so drop any selection the new data set no longer
+            // offers. Leaving them in applies a filter that matches nothing and is not shown
+            // anywhere in the UI - the grid just comes up empty after switching maps.
+            selectedTypes.RemoveAll(t => !types.Contains(t));
 
             updateButtons();
         }
@@ -520,6 +526,8 @@ namespace AnimeStudio.GUI
         {
             ResourceMap.Clear();
             _assetEntries.Clear();
+            types.Clear();
+            selectedTypes.Clear();
             assetDataGridView.Rows.Clear();
         }
 
@@ -608,7 +616,9 @@ namespace AnimeStudio.GUI
             {
                 FormBorderStyle = FormBorderStyle.FixedToolWindow,
                 StartPosition = FormStartPosition.Manual,
-                Size = new Size(300, Math.Min(50 * types.Count(), 600)),
+                // 40px for the OK row plus the window chrome, otherwise a short type list leaves
+                // no room for the CheckedListBox at all and the filter cannot be operated.
+                Size = new Size(300, Math.Min(50 * types.Count(), 600) + 40 + SystemInformation.CaptionHeight),
                 Location = this.PointToScreen(new Point(filterSelectTypesBtn.Left, filterSelectTypesBtn.Bottom)),
                 ShowInTaskbar = false,
             };

@@ -159,6 +159,8 @@ namespace acl
 		// Must be static constexpr!
 		static constexpr bool is_per_track_rounding_supported() { return true; }
 
+		static constexpr bool is_hoyo() { return false; }
+
 		//////////////////////////////////////////////////////////////////////////
 		// The database settings to use when decompressing.
 		// By default, the database isn't supported.
@@ -174,6 +176,17 @@ namespace acl
 		//////////////////////////////////////////////////////////////////////////
 		// Only support scalar tracks
 		static constexpr bool is_track_type_supported(track_type8 type) { return type != track_type8::qvvf; }
+	};
+
+	struct debug_hoyo_scalar_decompression_settings : public decompression_settings
+	{
+		//////////////////////////////////////////////////////////////////////////
+		// Only support scalar tracks
+		static constexpr bool is_track_type_supported(track_type8 type) { return type != track_type8::qvvf; }
+
+		static constexpr compressed_tracks_version16 version_supported() { return compressed_tracks_version16::vHoYo; }
+
+		static constexpr bool is_hoyo() { return true; }
 	};
 
 	//////////////////////////////////////////////////////////////////////////
@@ -201,6 +214,21 @@ namespace acl
 		//////////////////////////////////////////////////////////////////////////
 		// Disabled by default since it is an uncommon feature
 		static constexpr bool is_per_track_rounding_supported() { return false; }
+	};
+
+	struct default_hoyo_scalar_decompression_settings : public decompression_settings
+	{
+		//////////////////////////////////////////////////////////////////////////
+		// Only support scalar tracks
+		static constexpr bool is_track_type_supported(track_type8 type) { return type != track_type8::qvvf; }
+
+		//////////////////////////////////////////////////////////////////////////
+		// Disabled by default since it is an uncommon feature
+		static constexpr bool is_per_track_rounding_supported() { return false; }
+
+		static constexpr compressed_tracks_version16 version_supported() { return compressed_tracks_version16::vHoYo; }
+
+		static constexpr bool is_hoyo() { return true; }
 	};
 
 	//////////////////////////////////////////////////////////////////////////

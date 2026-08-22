@@ -33,12 +33,14 @@
 #include "acl/core/range_reduction_types.h"
 #include "acl/core/track_formats.h"
 #include "acl/core/track_writer.h"
+#include "acl/core/impl/atomic.impl.h"
+#include "acl/core/impl/bit_cast.impl.h"
 #include "acl/core/impl/compiler_utils.h"
 #include "acl/core/impl/variable_bit_rates.h"
 #include "acl/decompression/database/database.h"
-#include "acl/decompression/impl/transform_animated_track_cache.h"
-#include "acl/decompression/impl/transform_constant_track_cache.h"
-#include "acl/decompression/impl/transform_decompression_context.h"
+#include "acl/decompression/impl/animated_track_cache.transform.h"
+#include "acl/decompression/impl/constant_track_cache.transform.h"
+#include "acl/decompression/impl/decompression_context.transform.h"
 #include "acl/math/quatf.h"
 #include "acl/math/quat_packing.h"
 #include "acl/math/vector4f.h"
@@ -82,7 +84,7 @@ namespace acl
 		template<class decompression_settings_type, class database_settings_type>
 		inline bool initialize_v0(persistent_transform_decompression_context_v0& context, const compressed_tracks& tracks, const database_context<database_settings_type>* database)
 		{
-			ACL_ASSERT(tracks.get_algorithm_type() == algorithm_type8::uniformly_sampled, "Invalid algorithm type [%s], expected [%s]", get_algorithm_name(tracks.get_algorithm_type()), get_algorithm_name(algorithm_type8::uniformly_sampled));
+			ACL_ASSERT(tracks.get_algorithm_type() == algorithm_type8::uniformly_sampled, "Invalid algorithm type [" ACL_ASSERT_STRING_FORMAT_SPECIFIER "], expected [" ACL_ASSERT_STRING_FORMAT_SPECIFIER "]", get_algorithm_name(tracks.get_algorithm_type()), get_algorithm_name(algorithm_type8::uniformly_sampled));
 
 			using translation_adapter = acl_impl::translation_decompression_settings_adapter<decompression_settings_type>;
 			using scale_adapter = acl_impl::scale_decompression_settings_adapter<decompression_settings_type>;
@@ -97,13 +99,17 @@ namespace acl
 			const vector_format8 translation_format = get_vector_format<translation_adapter>(packed_translation_format);
 			const vector_format8 scale_format = get_vector_format<scale_adapter>(packed_scale_format);
 
-			ACL_ASSERT(rotation_format == packed_rotation_format, "Statically compiled rotation format (%s) differs from the compressed rotation format (%s)!", get_rotation_format_name(rotation_format), get_rotation_format_name(packed_rotation_format));
-			ACL_ASSERT(translation_format == packed_translation_format, "Statically compiled translation format (%s) differs from the compressed translation format (%s)!", get_vector_format_name(translation_format), get_vector_format_name(packed_translation_format));
-			ACL_ASSERT(scale_format == packed_scale_format, "Statically compiled scale format (%s) differs from the compressed scale format (%s)!", get_vector_format_name(scale_format), get_vector_format_name(packed_scale_format));
+			ACL_ASSERT(rotation_format == packed_rotation_format, "Statically compiled rotation format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ") differs from the compressed rotation format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ")!", get_rotation_format_name(rotation_format), get_rotation_format_name(packed_rotation_format));
+			ACL_ASSERT(translation_format == packed_translation_format, "Statically compiled translation format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ") differs from the compressed translation format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ")!", get_vector_format_name(translation_format), get_vector_format_name(packed_translation_format));
+			ACL_ASSERT(scale_format == packed_scale_format, "Statically compiled scale format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ") differs from the compressed scale format (" ACL_ASSERT_STRING_FORMAT_SPECIFIER ")!", get_vector_format_name(scale_format), get_vector_format_name(packed_scale_format));
+
+			// Context is always the first member and versions should always match
+			const database_context_v0* db = bit_cast<const database_context_v0*>(database);
 
 			context.tracks = &tracks;
-			context.db = reinterpret_cast<const database_context_v0*>(database);	// Context is always the first member and versions should always match
-			context.clip_hash = tracks.get_hash();
+			context.db = db;
+			context.tracks_hash = tracks.get_hash();
+			context.db_hash = db != nullptr ? db->db_hash : 0;
 			context.sample_time = -1.0F;
 			context.rotation_format = rotation_format;
 			context.translation_format = translation_format;
@@ -125,15 +131,56 @@ namespace acl
 			return true;
 		}
 
-		inline bool is_dirty_v0(const persistent_transform_decompression_context_v0& context, const compressed_tracks& tracks)
+		template<class decompression_settings_type, class database_settings_type>
+		inline bool relocated_v0(persistent_transform_decompression_context_v0& context, const compressed_tracks& tracks, const database_context<database_settings_type>* database)
+		{
+			if (context.tracks_hash != tracks.get_hash())
+				return false;	// Hash is different, this instance did not relocate, it is different
+
+			// Context is always the first member and versions should always match
+			const database_context_v0* db = bit_cast<const database_context_v0*>(database);
+			const uint32_t db_hash = db != nullptr ? db->db_hash : 0;
+
+			if (context.db_hash != db_hash)
+				return false;	// Hash is different, this instance did not relocate, it is different
+
+			// The instances are identical and might have relocated, update our metadata
+			context.tracks = &tracks;
+			context.db = db;
+
+			// Reset the sample time to force seek() to be called again.
+			// The context otherwise contains pointers within the tracks and database instances
+			// that are populated during seek.
+			context.sample_time = -1.0F;
+
+			return true;
+		}
+
+		inline bool is_bound_to_v0(const persistent_transform_decompression_context_v0& context, const compressed_tracks& tracks)
 		{
 			if (context.tracks != &tracks)
-				return true;
+				return false;	// Different pointer, no guarantees
 
-			if (context.clip_hash != tracks.get_hash())
-				return true;
+			if (context.tracks_hash != tracks.get_hash())
+				return false;	// Different hash
 
-			return false;
+			// Must be bound to it!
+			return true;
+		}
+
+		inline bool is_bound_to_v0(const persistent_transform_decompression_context_v0& context, const compressed_database& database)
+		{
+			if (context.db == nullptr)
+				return false;	// Not bound to any database
+
+			if (context.db->db != &database)
+				return false;	// Different pointer, no guarantees
+
+			if (context.db_hash != database.get_hash())
+				return false;	// Different hash
+
+			// Must be bound to it!
+			return true;
 		}
 
 		template<class decompression_settings_type>
@@ -142,14 +189,16 @@ namespace acl
 			if (!decompression_settings_type::is_wrapping_supported())
 				return;	// Only clamping is supported
 
+			const compressed_tracks* tracks = context.tracks;
+
 			if (policy == sample_looping_policy::as_compressed)
-				policy = context.tracks->get_looping_policy();
+				policy = tracks->get_looping_policy();
 
 			const sample_looping_policy current_policy = static_cast<sample_looping_policy>(context.looping_policy);
 			if (current_policy != policy)
 			{
 				// Policy changed
-				context.clip_duration = context.tracks->get_finite_duration(policy);
+				context.clip_duration = tracks->get_finite_duration(policy);
 				context.looping_policy = static_cast<uint8_t>(policy);
 			}
 		}
@@ -157,7 +206,8 @@ namespace acl
 		template<class decompression_settings_type>
 		inline void seek_v0(persistent_transform_decompression_context_v0& context, float sample_time, sample_rounding_policy rounding_policy)
 		{
-			const tracks_header& header = get_tracks_header(*context.tracks);
+			const compressed_tracks* tracks = context.tracks;
+			const tracks_header& header = get_tracks_header(*tracks);
 			if (header.num_tracks == 0)
 				return;	// Empty track list
 
@@ -168,13 +218,13 @@ namespace acl
 			if (context.sample_time == sample_time && context.get_rounding_policy() == rounding_policy)
 				return;
 
-			const transform_tracks_header& transform_header = get_transform_tracks_header(*context.tracks);
+			const transform_tracks_header& transform_header = get_transform_tracks_header(*tracks);
 
 			// Prefetch our sub-track types, we'll need them soon when we start decompressing
 			// Most clips will have their sub-track types fit into 1 or 2 cache lines, we'll prefetch 2
 			// to be safe
 			{
-				const uint8_t* sub_track_types = reinterpret_cast<const uint8_t*>(transform_header.get_sub_track_types());
+				const uint8_t* sub_track_types = bit_cast<const uint8_t*>(transform_header.get_sub_track_types());
 
 				ACL_IMPL_SEEK_PREFETCH(sub_track_types);
 				ACL_IMPL_SEEK_PREFETCH(sub_track_types + 64);
@@ -202,24 +252,26 @@ namespace acl
 
 			// These two pointers are the same, the compiler should optimize one out, only here for type safety later
 			const segment_header* segment_headers = transform_header.get_segment_headers();
-			const segment_tier0_header* segment_tier0_headers = transform_header.get_segment_tier0_headers();
+			const stripped_segment_header_t* segment_tier0_headers = transform_header.get_stripped_segment_headers();
 
 			const uint32_t num_segments = transform_header.num_segments;
 
 			constexpr bool is_database_supported = is_database_supported_impl<decompression_settings_type>();
-			ACL_ASSERT(is_database_supported || !context.tracks->has_database(), "Cannot have a database when it isn't supported");
+			ACL_ASSERT(is_database_supported || !tracks->has_database(), "Cannot have a database when it isn't supported");
 
-			const bool has_database = is_database_supported && context.tracks->has_database();
+			const bool has_database = is_database_supported && tracks->has_database();
 			const database_context_v0* db = context.db;
+
+			const bool has_stripped_keyframes = has_database || tracks->has_stripped_keyframes();
 
 			if (num_segments == 1)
 			{
 				// Key frame 0 and 1 are in the only segment present
 				// This is a really common case and when it happens, we don't store the segment start index (zero)
 
-				if (is_database_supported && has_database)
+				if (has_stripped_keyframes)
 				{
-					const segment_tier0_header* segment_tier0_header0 = segment_tier0_headers;
+					const stripped_segment_header_t* segment_tier0_header0 = segment_tier0_headers;
 
 					// This will cache miss
 					uint32_t sample_indices0 = segment_tier0_header0->sample_indices;
@@ -234,7 +286,7 @@ namespace acl
 					uint64_t low_importance_tier_metadata0 = 0;
 
 					// Combine all our loaded samples into a single bit set to find which samples we need to interpolate
-					if (db != nullptr)
+					if (is_database_supported && db != nullptr)
 					{
 						// Possible cache miss for the clip header offset
 						// Cache miss for the db clip segment headers pointer
@@ -244,8 +296,8 @@ namespace acl
 
 						// Cache miss for the db segment headers
 						const database_runtime_segment_header* db_segment_header0 = db_segment_headers;
-						medium_importance_tier_metadata0 = db_segment_header0->tier_metadata[0].load(std::memory_order::memory_order_relaxed);
-						low_importance_tier_metadata0 = db_segment_header0->tier_metadata[1].load(std::memory_order::memory_order_relaxed);
+						medium_importance_tier_metadata0 = db_segment_header0->tier_metadata[0].load(k_memory_order_relaxed);
+						low_importance_tier_metadata0 = db_segment_header0->tier_metadata[1].load(k_memory_order_relaxed);
 
 						sample_indices0 |= uint32_t(medium_importance_tier_metadata0);
 						sample_indices0 |= uint32_t(low_importance_tier_metadata0);
@@ -263,13 +315,13 @@ namespace acl
 					// Calculate our new interpolation alpha
 					// We used the rounding policy above to snap to the correct key frame earlier but we might need to interpolate now
 					// if key frames have been removed
-					context.interpolation_alpha = find_linear_interpolation_alpha(sample_index, key_frame0, key_frame1, sample_rounding_policy::none);
+					context.interpolation_alpha = find_linear_interpolation_alpha(sample_index, key_frame0, key_frame1, sample_rounding_policy::none, looping_policy_);
 
 					// Find where our data lives (clip or database tier X)
 					sample_indices0 = segment_tier0_header0->sample_indices;
 					uint32_t sample_indices1 = sample_indices0;	// Identical
 
-					if (db != nullptr)
+					if (is_database_supported && db != nullptr)
 					{
 						const uint64_t sample_index0 = uint64_t(1) << (31 - key_frame0);
 						const uint64_t sample_index1 = uint64_t(1) << (31 - key_frame1);
@@ -305,8 +357,8 @@ namespace acl
 					segment_key_frame1 = count_set_bits(and_not(0xFFFFFFFFU >> key_frame1, sample_indices1));
 
 					// Nasty but safe since they have the same layout
-					segment_header0 = reinterpret_cast<const segment_header*>(segment_tier0_header0);
-					segment_header1 = reinterpret_cast<const segment_header*>(segment_tier0_header0);
+					segment_header0 = static_cast<const segment_header*>(segment_tier0_header0);
+					segment_header1 = static_cast<const segment_header*>(segment_tier0_header0);
 				}
 				else
 				{
@@ -356,10 +408,10 @@ namespace acl
 				segment_key_frame0 = key_frame0 - segment_start_indices[segment_index0];
 				segment_key_frame1 = key_frame1 - segment_start_indices[segment_index1];
 
-				if (is_database_supported && has_database)
+				if (has_stripped_keyframes)
 				{
-					const segment_tier0_header* segment_tier0_header0 = segment_tier0_headers + segment_index0;
-					const segment_tier0_header* segment_tier0_header1 = segment_tier0_headers + segment_index1;
+					const stripped_segment_header_t* segment_tier0_header0 = segment_tier0_headers + segment_index0;
+					const stripped_segment_header_t* segment_tier0_header1 = segment_tier0_headers + segment_index1;
 
 					// This will cache miss
 					uint32_t sample_indices0 = segment_tier0_header0->sample_indices;
@@ -377,7 +429,7 @@ namespace acl
 					uint64_t low_importance_tier_metadata1 = 0;
 
 					// Combine all our loaded samples into a single bit set to find which samples we need to interpolate
-					if (db != nullptr)
+					if (is_database_supported && db != nullptr)
 					{
 						// Possible cache miss for the clip header offset
 						// Cache miss for the db clip segment headers pointer
@@ -387,15 +439,15 @@ namespace acl
 
 						// Cache miss for the db segment headers
 						const database_runtime_segment_header* db_segment_header0 = db_segment_headers + segment_index0;
-						medium_importance_tier_metadata0 = db_segment_header0->tier_metadata[0].load(std::memory_order::memory_order_relaxed);
-						low_importance_tier_metadata0 = db_segment_header0->tier_metadata[1].load(std::memory_order::memory_order_relaxed);
+						medium_importance_tier_metadata0 = db_segment_header0->tier_metadata[0].load(k_memory_order_relaxed);
+						low_importance_tier_metadata0 = db_segment_header0->tier_metadata[1].load(k_memory_order_relaxed);
 
 						sample_indices0 |= uint32_t(medium_importance_tier_metadata0);
 						sample_indices0 |= uint32_t(low_importance_tier_metadata0);
 
 						const database_runtime_segment_header* db_segment_header1 = db_segment_headers + segment_index1;
-						medium_importance_tier_metadata1 = db_segment_header1->tier_metadata[0].load(std::memory_order::memory_order_relaxed);
-						low_importance_tier_metadata1 = db_segment_header1->tier_metadata[1].load(std::memory_order::memory_order_relaxed);
+						medium_importance_tier_metadata1 = db_segment_header1->tier_metadata[0].load(k_memory_order_relaxed);
+						low_importance_tier_metadata1 = db_segment_header1->tier_metadata[1].load(k_memory_order_relaxed);
 
 						sample_indices1 |= uint32_t(medium_importance_tier_metadata1);
 						sample_indices1 |= uint32_t(low_importance_tier_metadata1);
@@ -417,13 +469,13 @@ namespace acl
 					// Calculate our new interpolation alpha
 					// We used the rounding policy above to snap to the correct key frame earlier but we might need to interpolate now
 					// if key frames have been removed
-					context.interpolation_alpha = find_linear_interpolation_alpha(sample_index, clip_key_frame0, clip_key_frame1, sample_rounding_policy::none);
+					context.interpolation_alpha = find_linear_interpolation_alpha(sample_index, clip_key_frame0, clip_key_frame1, sample_rounding_policy::none, looping_policy_);
 
 					// Find where our data lives (clip or database tier X)
 					sample_indices0 = segment_tier0_header0->sample_indices;
 					sample_indices1 = segment_tier0_header1->sample_indices;
 
-					if (db != nullptr)
+					if (is_database_supported && db != nullptr)
 					{
 						const uint64_t sample_index0 = uint64_t(1) << (31 - segment_key_frame0);
 						const uint64_t sample_index1 = uint64_t(1) << (31 - segment_key_frame1);
@@ -458,8 +510,8 @@ namespace acl
 					segment_key_frame1 = count_set_bits(and_not(0xFFFFFFFFU >> segment_key_frame1, sample_indices1));
 
 					// Nasty but safe since they have the same layout
-					segment_header0 = reinterpret_cast<const segment_header*>(segment_tier0_header0);
-					segment_header1 = reinterpret_cast<const segment_header*>(segment_tier0_header1);
+					segment_header0 = static_cast<const segment_header*>(segment_tier0_header0);
+					segment_header1 = static_cast<const segment_header*>(segment_tier0_header1);
 				}
 				else
 				{
@@ -493,7 +545,7 @@ namespace acl
 				context.animated_track_data[1] = context.animated_track_data[0];
 			}
 
-			if (is_database_supported && has_database)
+			if (has_database)
 			{
 				// Update our pointers if the data lives within the database
 				if (db_animated_track_data0 != nullptr)
@@ -506,8 +558,8 @@ namespace acl
 			context.key_frame_bit_offsets[0] = segment_key_frame0 * segment_header0->animated_pose_bit_size;
 			context.key_frame_bit_offsets[1] = segment_key_frame1 * segment_header1->animated_pose_bit_size;
 
-			context.segment_offsets[0] = ptr_offset32<segment_header>(context.tracks, segment_header0);
-			context.segment_offsets[1] = ptr_offset32<segment_header>(context.tracks, segment_header1);
+			context.segment_offsets[0] = ptr_offset32<segment_header>(tracks, segment_header0);
+			context.segment_offsets[1] = ptr_offset32<segment_header>(tracks, segment_header1);
 		}
 
 
@@ -1474,7 +1526,8 @@ namespace acl
 		template<class decompression_settings_type, class track_writer_type>
 		inline void decompress_tracks_v0(const persistent_transform_decompression_context_v0& context, track_writer_type& writer)
 		{
-			const tracks_header& header = get_tracks_header(*context.tracks);
+			const compressed_tracks* tracks = context.tracks;
+			const tracks_header& header = get_tracks_header(*tracks);
 			const uint32_t num_tracks = header.num_tracks;
 			if (num_tracks == 0)
 				return;	// Empty track list
@@ -1495,7 +1548,7 @@ namespace acl
 			const rtm::vector4f default_scale = rtm::vector_set(float(header.get_default_scale()));
 			const uint32_t has_scale = context.has_scale;
 
-			const packed_sub_track_types* sub_track_types = get_transform_tracks_header(*context.tracks).get_sub_track_types();
+			const packed_sub_track_types* sub_track_types = get_transform_tracks_header(*tracks).get_sub_track_types();
 			const uint32_t num_sub_track_entries = (num_tracks + k_num_sub_tracks_per_packed_entry - 1) / k_num_sub_tracks_per_packed_entry;
 			const uint32_t num_padded_sub_tracks = (num_sub_track_entries * k_num_sub_tracks_per_packed_entry) - num_tracks;
 			const uint32_t last_entry_index = num_sub_track_entries - 1;
@@ -1700,7 +1753,8 @@ namespace acl
 		template<class decompression_settings_type, class track_writer_type>
 		inline void decompress_track_v0(const persistent_transform_decompression_context_v0& context, uint32_t track_index, track_writer_type& writer)
 		{
-			const tracks_header& tracks_header_ = get_tracks_header(*context.tracks);
+			const compressed_tracks* tracks = context.tracks;
+			const tracks_header& tracks_header_ = get_tracks_header(*tracks);
 			const uint32_t num_tracks = tracks_header_.num_tracks;
 			if (num_tracks == 0)
 				return;	// Empty track list
@@ -1743,7 +1797,7 @@ namespace acl
 
 			const uint32_t has_scale = context.has_scale;
 
-			const packed_sub_track_types* sub_track_types = get_transform_tracks_header(*context.tracks).get_sub_track_types();
+			const packed_sub_track_types* sub_track_types = get_transform_tracks_header(*tracks).get_sub_track_types();
 			const uint32_t num_sub_track_entries = (num_tracks + k_num_sub_tracks_per_packed_entry - 1) / k_num_sub_tracks_per_packed_entry;
 
 			const packed_sub_track_types* rotation_sub_track_types = sub_track_types;
@@ -1755,7 +1809,7 @@ namespace acl
 			// Build a mask to strip out the scale sub-track types if we have no scale present
 			// has_scale is either 0 or 1, negating yields 0 (0x00000000) or -1 (0xFFFFFFFF)
 			// Equivalent to: has_scale ? 0xFFFFFFFF : 0x00000000
-			const uint32_t scale_sub_track_mask = -int32_t(has_scale);
+			const uint32_t scale_sub_track_mask = static_cast<uint32_t>(-int32_t(has_scale));
 
 			const uint32_t sub_track_entry_index = track_index / 16;
 			const uint32_t packed_index = track_index % 16;
@@ -1836,9 +1890,9 @@ namespace acl
 				num_animated_scales += count_set_bits(scale_sub_track_type_ & 0xAAAAAAAA);
 			}
 
-			uint32_t rotation_group_sample_index;
-			uint32_t translation_group_sample_index;
-			uint32_t scale_group_sample_index;
+			uint32_t rotation_group_sample_index = 0;
+			uint32_t translation_group_sample_index = 0;
+			uint32_t scale_group_sample_index = 0;
 
 			constant_track_cache_v0 constant_track_cache;
 

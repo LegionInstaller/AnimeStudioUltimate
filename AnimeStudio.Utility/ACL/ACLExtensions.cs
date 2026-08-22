@@ -5,7 +5,11 @@ namespace AnimeStudio
 {
     public static class ACLExtensions
     {
-        public static void Process(this ACLClip m_ACLClip, Game game, out float[] values, out float[] times) 
+        /// <summary>
+        /// Single dispatch point from a parsed ACL clip to the native decoder that can read it.
+        /// The clip type carries the layout, so no game checks are needed below the SR split.
+        /// </summary>
+        public static void Process(this ACLClip m_ACLClip, Game game, out float[] values, out float[] times)
         {
             if (game.Type.IsSRGroup())
             {
@@ -19,16 +23,12 @@ namespace AnimeStudio
                     case GIACLClip giaclClip:
                         DBACL.DecompressTracks(giaclClip.m_ClipData, giaclClip.m_DatabaseData, out values, out times);
                         break;
+                    // Must precede MHYACLClip -- ZZZACLClip derives from it.
+                    case ZZZACLClip zzzaclClip:
+                        DBACL.DecompressTracksZZZ(zzzaclClip.m_TransformData, zzzaclClip.m_ScalarData, zzzaclClip.m_databaseData, zzzaclClip.m_DatabaseData, out values, out times);
+                        break;
                     case MHYACLClip mhyaclClip:
-                        if (game.Type.IsZZZ())
-                        {
-                            DBACL.DecompressTracks(mhyaclClip.m_ClipData, mhyaclClip.m_databaseData, out values, out times, true);
-                        }
-                        else
-                        {
-                            ACL.DecompressAll(mhyaclClip.m_ClipData, out values, out times);
-                        }
-
+                        ACL.DecompressAll(mhyaclClip.m_ClipData, out values, out times);
                         break;
                     default:
                         values = Array.Empty<float>();

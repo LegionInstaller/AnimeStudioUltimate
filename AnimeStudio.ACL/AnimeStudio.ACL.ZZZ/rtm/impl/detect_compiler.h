@@ -30,13 +30,14 @@
 #if defined(__GNUG__) && !defined(__clang__)
 	#define RTM_COMPILER_GCC
 #elif defined(__clang__)
-	#define RTM_COMPILER_CLANG
+	#define RTM_COMPILER_CLANG		__clang_major__
 #elif defined(_MSC_VER) && !defined(__clang__)
 	#define RTM_COMPILER_MSVC		_MSC_VER
 	#define RTM_COMPILER_MSVC_2013	1800
 	#define RTM_COMPILER_MSVC_2015	1900
 	#define RTM_COMPILER_MSVC_2017	1910
 	#define RTM_COMPILER_MSVC_2019	1920
+	#define RTM_COMPILER_MSVC_2022	1930
 
 	#if RTM_COMPILER_MSVC < RTM_COMPILER_MSVC_2015
 		#pragma message("Warning: This version of visual studio isn't officially supported")

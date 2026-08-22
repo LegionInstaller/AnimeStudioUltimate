@@ -29,10 +29,14 @@
 #include "rtm/math.h"
 #include "rtm/scalarf.h"
 #include "rtm/version.h"
+#include "rtm/impl/bit_cast.impl.h"
 #include "rtm/impl/compiler_utils.h"
 #include "rtm/impl/macros.mask4.impl.h"
 #include "rtm/impl/memory_utils.h"
 #include "rtm/impl/vector_common.h"
+
+#include <cstring>
+#include <limits>
 
 RTM_IMPL_FILE_PRAGMA_PUSH
 
@@ -78,7 +82,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_load2(const float* input) RTM_NO_EXCEPT
 	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return _mm_castpd_ps(_mm_load_sd(rtm_impl::bit_cast<const double*>(input)));
+#elif defined(RTM_NEON_INTRINSICS)
+		const float32x2_t xy = vld1_f32(input);
+		return vcombine_f32(xy, vdup_n_f32(0.0F));
+#else
 		return vector_set(input[0], input[1], 0.0F, 0.0F);
+#endif
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -86,7 +97,17 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_load3(const float* input) RTM_NO_EXCEPT
 	{
+#if defined(RTM_SSE2_INTRINSICS)
+		const __m128 xy = _mm_castpd_ps(_mm_load_sd(rtm_impl::bit_cast<const double*>(input)));
+		const __m128 z = _mm_load_ss(input + 2);
+		return _mm_movelh_ps(xy, z);
+#elif defined(RTM_NEON_INTRINSICS)
+		const float32x2_t xy = vld1_f32(input);
+		const float32x2_t z = vld1_lane_f32(input + 2, vdup_n_f32(0.0F), 0);
+		return vcombine_f32(xy, z);
+#else
 		return vector_set(input[0], input[1], input[2], 0.0F);
+#endif
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -108,7 +129,14 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_load2(const float2f* input) RTM_NO_EXCEPT
 	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return _mm_castpd_ps(_mm_load_sd(rtm_impl::bit_cast<const double*>(&input->x)));
+#elif defined(RTM_NEON_INTRINSICS)
+		const float32x2_t xy = vld1_f32(&input->x);
+		return vcombine_f32(xy, vdup_n_f32(0.0F));
+#else
 		return vector_set(input->x, input->y, 0.0F, 0.0F);
+#endif
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -116,7 +144,17 @@ namespace rtm
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_load3(const float3f* input) RTM_NO_EXCEPT
 	{
+#if defined(RTM_SSE2_INTRINSICS)
+		const __m128 xy = _mm_castpd_ps(_mm_load_sd(rtm_impl::bit_cast<const double*>(&input->x)));
+		const __m128 z = _mm_load_ss(&input->z);
+		return _mm_movelh_ps(xy, z);
+#elif defined(RTM_NEON_INTRINSICS)
+		const float32x2_t xy = vld1_f32(&input->x);
+		const float32x2_t z = vld1_lane_f32(&input->z, vdup_n_f32(0.0F), 0);
+		return vcombine_f32(xy, z);
+#else
 		return vector_set(input->x, input->y, input->z, 0.0F);
+#endif
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -181,6 +219,7 @@ namespace rtm
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 				return scalarf{ input };
@@ -197,6 +236,18 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_x RTM_SIMD_CALL vector_get_x(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_get_x{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 [x] component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_x_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return scalarf{ input };
+#else
+		return vector_get_x(input);
+#endif
 	}
 
 	namespace rtm_impl
@@ -221,6 +272,7 @@ namespace rtm
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 				return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(1, 1, 1, 1)) };
@@ -237,6 +289,18 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_y RTM_SIMD_CALL vector_get_y(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_get_y{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 [y] component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_y_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(1, 1, 1, 1)) };
+#else
+		return vector_get_y(input);
+#endif
 	}
 
 	namespace rtm_impl
@@ -261,6 +325,7 @@ namespace rtm
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 				return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(2, 2, 2, 2)) };
@@ -277,6 +342,18 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_z RTM_SIMD_CALL vector_get_z(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_get_z{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 [z] component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_z_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(2, 2, 2, 2)) };
+#else
+		return vector_get_z(input);
+#endif
 	}
 
 	namespace rtm_impl
@@ -301,6 +378,7 @@ namespace rtm
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 				return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(3, 3, 3, 3)) };
@@ -319,6 +397,18 @@ namespace rtm
 		return rtm_impl::vector4f_vector_get_w{ input };
 	}
 
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 [w] component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_w_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		return scalarf{ _mm_shuffle_ps(input, input, _MM_SHUFFLE(3, 3, 3, 3)) };
+#else
+		return vector_get_w(input);
+#endif
+	}
+
 	namespace rtm_impl
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -327,34 +417,33 @@ namespace rtm
 		// type differs. Implicit coercion is used to return the desired value
 		// at the call site.
 		//////////////////////////////////////////////////////////////////////////
-		template<mix4 component>
+		template<component4 component>
 		struct vector4f_vector_get_component_static
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const mix4 xyzw = mix4(int(component) % 4);
-				if (rtm_impl::static_condition<xyzw == mix4::x>::test())
-					return vector_get_x(input);
-				else if (rtm_impl::static_condition<xyzw == mix4::y>::test())
-					return vector_get_y(input);
-				else if (rtm_impl::static_condition<xyzw == mix4::z>::test())
-					return vector_get_z(input);
-				else
-					return vector_get_w(input);
+				switch (component)
+				{
+					default:
+					case component4::x:	return vector_get_x(input);
+					case component4::y:	return vector_get_y(input);
+					case component4::z:	return vector_get_z(input);
+					case component4::w:	return vector_get_w(input);
+				}
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const mix4 xyzw = mix4(int(component) % 4);
-				if (rtm_impl::static_condition<xyzw == mix4::x>::test())
-					return vector_get_x(input);
-				else if (rtm_impl::static_condition<xyzw == mix4::y>::test())
-					return vector_get_y(input);
-				else if (rtm_impl::static_condition<xyzw == mix4::z>::test())
-					return vector_get_z(input);
-				else
-					return vector_get_w(input);
+				switch (component)
+				{
+					default:
+					case component4::x:	return vector_get_x_as_scalar(input);
+					case component4::y:	return vector_get_y_as_scalar(input);
+					case component4::z:	return vector_get_z_as_scalar(input);
+					case component4::w:	return vector_get_w_as_scalar(input);
+				}
 			}
 #endif
 
@@ -363,12 +452,75 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector2 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	template<component2 component, component4 component_ = static_cast<component4>(component)>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component_static<component_> RTM_SIMD_CALL vector_get_component2(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_get_component_static<component_>{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector2 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	template<component2 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component2_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_get_x_as_scalar(input);
+			case component2::y:	return vector_get_y_as_scalar(input);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector3 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	template<component3 component, component4 component_ = static_cast<component4>(component)>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component_static<component_> RTM_SIMD_CALL vector_get_component3(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_get_component_static<component_>{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector3 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	template<component3 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component3_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_get_x_as_scalar(input);
+			case component3::y:	return vector_get_y_as_scalar(input);
+			case component3::z:	return vector_get_z_as_scalar(input);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the vector4 desired component.
 	//////////////////////////////////////////////////////////////////////////
-	template<mix4 component>
+	template<component4 component>
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component_static<component> RTM_SIMD_CALL vector_get_component(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_get_component_static<component>{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	template<component4 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_get_x_as_scalar(input);
+			case component4::y:	return vector_get_y_as_scalar(input);
+			case component4::z:	return vector_get_z_as_scalar(input);
+			case component4::w:	return vector_get_w_as_scalar(input);
+		}
 	}
 
 	namespace rtm_impl
@@ -383,44 +535,101 @@ namespace rtm
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const mix4 xyzw = mix4(int(component) % 4);
-				if (xyzw == mix4::x)
-					return vector_get_x(input);
-				else if (xyzw == mix4::y)
-					return vector_get_y(input);
-				else if (xyzw == mix4::z)
-					return vector_get_z(input);
-				else
-					return vector_get_w(input);
+				switch (component)
+				{
+					default:
+					case component4::x:	return vector_get_x(input);
+					case component4::y:	return vector_get_y(input);
+					case component4::z:	return vector_get_z(input);
+					case component4::w:	return vector_get_w(input);
+				}
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const mix4 xyzw = mix4(int(component) % 4);
-				if (xyzw == mix4::x)
-					return vector_get_x(input);
-				else if (xyzw == mix4::y)
-					return vector_get_y(input);
-				else if (xyzw == mix4::z)
-					return vector_get_z(input);
-				else
-					return vector_get_w(input);
+				switch (component)
+				{
+					default:
+					case component4::x:	return vector_get_x_as_scalar(input);
+					case component4::y:	return vector_get_y_as_scalar(input);
+					case component4::z:	return vector_get_z_as_scalar(input);
+					case component4::w:	return vector_get_w_as_scalar(input);
+				}
 			}
 #endif
 
 			vector4f input;
-			mix4 component;
-			int padding[3];
+			component4 component;
+			int32_t padding[3];
 		};
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector2 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component RTM_SIMD_CALL vector_get_component2(vector4f_arg0 input, component2 component) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_get_component{ input, static_cast<component4>(component), { 0 } };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector2 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component2_as_scalar(vector4f_arg0 input, component2 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_get_x_as_scalar(input);
+			case component2::y:	return vector_get_y_as_scalar(input);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector3 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component RTM_SIMD_CALL vector_get_component3(vector4f_arg0 input, component3 component) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_get_component{ input, static_cast<component4>(component), { 0 } };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector3 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component3_as_scalar(vector4f_arg0 input, component3 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_get_x_as_scalar(input);
+			case component3::y:	return vector_get_y_as_scalar(input);
+			case component3::z:	return vector_get_z_as_scalar(input);
+		}
 	}
 
 	//////////////////////////////////////////////////////////////////////////
 	// Returns the vector4 desired component.
 	//////////////////////////////////////////////////////////////////////////
-	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component RTM_SIMD_CALL vector_get_component(vector4f_arg0 input, mix4 component) RTM_NO_EXCEPT
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_get_component RTM_SIMD_CALL vector_get_component(vector4f_arg0 input, component4 component) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_get_component{ input, component, { 0 } };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the vector4 desired component.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_component_as_scalar(vector4f_arg0 input, component4 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_get_x_as_scalar(input);
+			case component4::y:	return vector_get_y_as_scalar(input);
+			case component4::z:	return vector_get_z_as_scalar(input);
+			case component4::w:	return vector_get_w_as_scalar(input);
+		}
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -432,11 +641,41 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns the smallest component in the input vector as a scalar.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_min_component_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		__m128 zwzw = _mm_movehl_ps(input, input);
+		__m128 xz_yw_zz_ww = _mm_min_ps(input, zwzw);
+		__m128 yw_yw_yw_yw = _mm_shuffle_ps(xz_yw_zz_ww, xz_yw_zz_ww, _MM_SHUFFLE(1, 1, 1, 1));
+		return scalarf{ _mm_min_ps(xz_yw_zz_ww, yw_yw_yw_yw) };
+#else
+		return vector_get_min_component(input);
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the largest component in the input vector as a scalar.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_get_max_component RTM_SIMD_CALL vector_get_max_component(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_get_max_component{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the largest component in the input vector as a scalar.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_get_max_component_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		__m128 zwzw = _mm_movehl_ps(input, input);
+		__m128 xz_yw_zz_ww = _mm_max_ps(input, zwzw);
+		__m128 yw_yw_yw_yw = _mm_shuffle_ps(xz_yw_zz_ww, xz_yw_zz_ww, _MM_SHUFFLE(1, 1, 1, 1));
+		return scalarf{ _mm_max_ps(xz_yw_zz_ww, yw_yw_yw_yw) };
+#else
+		return vector_get_max_component(input);
+#endif
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -566,11 +805,197 @@ namespace rtm
 #endif
 
 	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector2 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component2 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component2(vector4f_arg0 input, float lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_set_x(input, lane_value);
+			case component2::y:	return vector_set_y(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector2 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component2 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component2(vector4f_arg0 input, scalarf_arg1 lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_set_x(input, lane_value);
+			case component2::y:	return vector_set_y(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector3 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component3 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component3(vector4f_arg0 input, float lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_set_x(input, lane_value);
+			case component3::y:	return vector_set_y(input, lane_value);
+			case component3::z:	return vector_set_z(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector3 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component3 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component3(vector4f_arg0 input, scalarf_arg1 lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_set_x(input, lane_value);
+			case component3::y:	return vector_set_y(input, lane_value);
+			case component3::z:	return vector_set_z(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector4 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component4 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component(vector4f_arg0 input, float lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_set_x(input, lane_value);
+			case component4::y:	return vector_set_y(input, lane_value);
+			case component4::z:	return vector_set_z(input, lane_value);
+			case component4::w:	return vector_set_w(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector4 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	template<component4 component>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component(vector4f_arg0 input, scalarf_arg1 lane_value) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_set_x(input, lane_value);
+			case component4::y:	return vector_set_y(input, lane_value);
+			case component4::z:	return vector_set_z(input, lane_value);
+			case component4::w:	return vector_set_w(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector2 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component2(vector4f_arg0 input, float lane_value, component2 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_set_x(input, lane_value);
+			case component2::y:	return vector_set_y(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector2 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component2(vector4f_arg0 input, scalarf_arg1 lane_value, component2 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component2::x:	return vector_set_x(input, lane_value);
+			case component2::y:	return vector_set_y(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector3 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component3(vector4f_arg0 input, float lane_value, component3 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_set_x(input, lane_value);
+			case component3::y:	return vector_set_y(input, lane_value);
+			case component3::z:	return vector_set_z(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector3 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component3(vector4f_arg0 input, scalarf_arg1 lane_value, component3 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component3::x:	return vector_set_x(input, lane_value);
+			case component3::y:	return vector_set_y(input, lane_value);
+			case component3::z:	return vector_set_z(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector4 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component(vector4f_arg0 input, float lane_value, component4 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_set_x(input, lane_value);
+			case component4::y:	return vector_set_y(input, lane_value);
+			case component4::z:	return vector_set_z(input, lane_value);
+			case component4::w:	return vector_set_w(input, lane_value);
+		}
+	}
+
+#if defined(RTM_SSE2_INTRINSICS)
+	//////////////////////////////////////////////////////////////////////////
+	// Sets the desired vector4 component and returns the new value.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_set_component(vector4f_arg0 input, scalarf_arg1 lane_value, component4 component) RTM_NO_EXCEPT
+	{
+		switch (component)
+		{
+			default:
+			case component4::x:	return vector_set_x(input, lane_value);
+			case component4::y:	return vector_set_y(input, lane_value);
+			case component4::z:	return vector_set_z(input, lane_value);
+			case component4::w:	return vector_set_w(input, lane_value);
+		}
+	}
+#endif
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns a floating point pointer to the vector4 data.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE const float* RTM_SIMD_CALL vector_to_pointer(const vector4f& input) RTM_NO_EXCEPT
 	{
-		return reinterpret_cast<const float*>(&input);
+		return rtm_impl::bit_cast<const float*>(&input);
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -836,7 +1261,7 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_neg(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
-		constexpr __m128 signs = { -0.0F, -0.0F, -0.0F, -0.0F };
+		constexpr __m128 signs = RTM_VECTOR4F_MAKE(-0.0F, -0.0F, -0.0F, -0.0F);
 		return _mm_xor_ps(input, signs);
 #elif defined(RTM_NEON_INTRINSICS)
 		return vnegq_f32(input);
@@ -846,10 +1271,41 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Per component negation of the input: -input
+	// Each template argument controls whether a SIMD lane should be negated (true) or not (false).
+	//////////////////////////////////////////////////////////////////////////
+	template<bool x, bool y, bool z, bool w>
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_neg(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		constexpr __m128 signs = RTM_VECTOR4F_MAKE(x ? -0.0F : 0.0F, y ? -0.0F : 0.0F, z ? -0.0F : 0.0F, w ? -0.0F : 0.0F);
+		return _mm_xor_ps(input, signs);
+#elif defined(RTM_NEON_INTRINSICS)
+		alignas(16) constexpr uint32_t sign_bit_i[4] =
+		{
+			x ? 0x80000000U : 0,
+			y ? 0x80000000U : 0,
+			z ? 0x80000000U : 0,
+			w ? 0x80000000U : 0,
+		};
+		const uint32x4_t sign_bit = *rtm_impl::bit_cast<const uint32x4_t*>(&sign_bit_i[0]);
+		return vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(input), sign_bit));
+#else
+		const vector4f signs = vector_set(x ? -1.0F : 1.0F, y ? -1.0F : 1.0F, z ? -1.0F : 1.0F, w ? -1.0F : 1.0F);
+		return vector_mul(input, signs);
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Per component reciprocal of the input: 1.0 / input
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_reciprocal(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
+		// Performance note:
+		// With modern out-of-order executing processors, it is typically faster to use
+		// a full division instead of a reciprocal estimate + Newton-Raphson iterations
+		// because the resulting code is more dense and is more likely to inline and
+		// as it uses fewer instructions.
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_div_ps(_mm_set_ps1(1.0F), input);
 #elif defined(RTM_NEON64_INTRINSICS)
@@ -885,6 +1341,19 @@ namespace rtm
 		scalarf w = vector_get_w(input);
 		return vector_set(scalar_sqrt(x), scalar_sqrt(y), scalar_sqrt(z), scalar_sqrt(w));
 #endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Per component reciprocal square root of the input: 1.0 / sqrt(input)
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_sqrt_reciprocal(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		// Performance note:
+		// With modern out-of-order executing processors, it is typically faster to use
+		// a full division/square root instead of a reciprocal estimate + Newton-Raphson iterations
+		// because the resulting code is more dense and is more likely to inline and
+		// as it uses fewer instructions.
+		return vector_reciprocal(vector_sqrt(input));
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1079,7 +1548,7 @@ namespace rtm
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
 #if defined(RTM_SSE4_INTRINSICS) && 0
-				// SSE4 dot product instruction isn't precise enough
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
 				return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF));
 #elif defined(RTM_SSE2_INTRINSICS)
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1088,16 +1557,27 @@ namespace rtm
 				__m128 y2w2_0_0_0 = _mm_shuffle_ps(x2z2_y2w2_0_0, x2z2_y2w2_0_0, _MM_SHUFFLE(0, 0, 0, 1));
 				__m128 x2y2z2w2_0_0_0 = _mm_add_ps(x2z2_y2w2_0_0, y2w2_0_0_0);
 				return _mm_cvtss_f32(x2y2z2w2_0_0_0);
+#elif defined(RTM_NEON64_INTRINSICS) && defined(RTM_IMPL_VADDVQ_SUPPORTED)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				return vaddvq_f32(x2_y2_z2_w2);
+#elif defined(RTM_NEON_INTRINSICS)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+				float32x2_t z2_w2 = vget_high_f32(x2_y2_z2_w2);
+				float32x2_t x2z2_y2w2 = vadd_f32(x2_y2, z2_w2);
+				float32x2_t x2y2z2w2 = vpadd_f32(x2z2_y2w2, x2z2_y2w2);
+				return vget_lane_f32(x2y2z2w2, 0);
 #else
 				return (vector_get_x(lhs) * vector_get_x(rhs)) + (vector_get_y(lhs) * vector_get_y(rhs)) + (vector_get_z(lhs) * vector_get_z(rhs)) + (vector_get_w(lhs) * vector_get_w(rhs));
 #endif
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 #if defined(RTM_SSE4_INTRINSICS) && 0
-				// SSE4 dot product instruction isn't precise enough
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
 				return scalarf{ _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF)) };
 #else
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1110,10 +1590,11 @@ namespace rtm
 			}
 #endif
 
+			RTM_DEPRECATED("Use 'as_vector' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator vector4f() const RTM_NO_EXCEPT
 			{
 #if defined(RTM_SSE4_INTRINSICS) && 0
-				// SSE4 dot product instruction isn't precise enough
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
 				return _mm_dp_ps(lhs, rhs, 0xFF);
 #elif defined(RTM_SSE2_INTRINSICS)
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1122,6 +1603,11 @@ namespace rtm
 				__m128 y2w2_0_0_0 = _mm_shuffle_ps(x2z2_y2w2_0_0, x2z2_y2w2_0_0, _MM_SHUFFLE(0, 0, 0, 1));
 				__m128 x2y2z2w2_0_0_0 = _mm_add_ps(x2z2_y2w2_0_0, y2w2_0_0_0);
 				return _mm_shuffle_ps(x2y2z2w2_0_0_0, x2y2z2w2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON64_INTRINSICS)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				float32x4_t x2y2_z2w2_x2y2_z2w2 = vpaddq_f32(x2_y2_z2_w2, x2_y2_z2_w2);
+				float32x4_t x2y2z2w2_x2y2z2w2_x2y2z2w2_x2y2z2w2 = vpaddq_f32(x2y2_z2w2_x2y2_z2w2, x2y2_z2w2_x2y2_z2w2);
+				return x2y2z2w2_x2y2z2w2_x2y2z2w2_x2y2z2w2;
 #elif defined(RTM_NEON_INTRINSICS)
 				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
 				float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
@@ -1148,6 +1634,172 @@ namespace rtm
 		return rtm_impl::vector4f_vector_dot{ lhs, rhs };
 	}
 
+	//////////////////////////////////////////////////////////////////////////
+	// 4D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_dot_as_scalar(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+	#if defined(RTM_SSE4_INTRINSICS) && 0
+		// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+		return scalarf{ _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF)) };
+	#else
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 z2_w2_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 3, 2));
+		__m128 x2z2_y2w2_0_0 = _mm_add_ps(x2_y2_z2_w2, z2_w2_0_0);
+		__m128 y2w2_0_0_0 = _mm_shuffle_ps(x2z2_y2w2_0_0, x2z2_y2w2_0_0, _MM_SHUFFLE(0, 0, 0, 1));
+		__m128 x2y2z2w2_0_0_0 = _mm_add_ps(x2z2_y2w2_0_0, y2w2_0_0_0);
+		return scalarf{ x2y2z2w2_0_0_0 };
+	#endif
+#else
+	return vector_dot(lhs, rhs);
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// 4D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_dot_as_vector(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE4_INTRINSICS) && 0
+		// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+		return _mm_dp_ps(lhs, rhs, 0xFF);
+#elif defined(RTM_SSE2_INTRINSICS)
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 z2_w2_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 3, 2));
+		__m128 x2z2_y2w2_0_0 = _mm_add_ps(x2_y2_z2_w2, z2_w2_0_0);
+		__m128 y2w2_0_0_0 = _mm_shuffle_ps(x2z2_y2w2_0_0, x2z2_y2w2_0_0, _MM_SHUFFLE(0, 0, 0, 1));
+		__m128 x2y2z2w2_0_0_0 = _mm_add_ps(x2z2_y2w2_0_0, y2w2_0_0_0);
+		return _mm_shuffle_ps(x2y2z2w2_0_0_0, x2y2z2w2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON64_INTRINSICS)
+		float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+		float32x4_t x2y2_z2w2_x2y2_z2w2 = vpaddq_f32(x2_y2_z2_w2, x2_y2_z2_w2);
+		float32x4_t x2y2z2w2_x2y2z2w2_x2y2z2w2_x2y2z2w2 = vpaddq_f32(x2y2_z2w2_x2y2_z2w2, x2y2_z2w2_x2y2_z2w2);
+		return x2y2z2w2_x2y2z2w2_x2y2z2w2_x2y2z2w2;
+#elif defined(RTM_NEON_INTRINSICS)
+		float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+		float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+		float32x2_t z2_w2 = vget_high_f32(x2_y2_z2_w2);
+		float32x2_t x2z2_y2w2 = vadd_f32(x2_y2, z2_w2);
+		float32x2_t x2y2z2w2 = vpadd_f32(x2z2_y2w2, x2z2_y2w2);
+		return vcombine_f32(x2y2z2w2, x2y2z2w2);
+#else
+		return vector_set(vector_dot_as_scalar(lhs, rhs));
+#endif
+	}
+
+	namespace rtm_impl
+	{
+		//////////////////////////////////////////////////////////////////////////
+		// This is a helper struct to allow a single consistent API between
+		// various vector types when the semantics are identical but the return
+		// type differs. Implicit coercion is used to return the desired value
+		// at the call site.
+		//////////////////////////////////////////////////////////////////////////
+		struct vector4f_vector_dot2
+		{
+			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
+			{
+#if defined(RTM_SSE4_INTRINSICS) && 0
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+				return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0x7F));
+#elif defined(RTM_SSE2_INTRINSICS)
+				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+				__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+				__m128 x2y2_0_0_0 = _mm_add_ss(x2_y2_z2_w2, y2_0_0_0);
+				return _mm_cvtss_f32(x2y2_0_0_0);
+#elif defined(RTM_NEON_INTRINSICS)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+				float32x2_t x2y2_x2y2 = vpadd_f32(x2_y2, x2_y2);
+				return vget_lane_f32(x2y2_x2y2, 0);
+#else
+				return (vector_get_x(lhs) * vector_get_x(rhs)) + (vector_get_y(lhs) * vector_get_y(rhs));
+#endif
+			}
+
+#if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
+			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
+			{
+				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+				__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+				return scalarf{ _mm_add_ss(x2_y2_z2_w2, y2_0_0_0) };
+			}
+#endif
+
+			RTM_DEPRECATED("Use 'as_vector' suffix instead. To be removed in 2.4.")
+			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator vector4f() const RTM_NO_EXCEPT
+			{
+#if defined(RTM_SSE4_INTRINSICS) && 0
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+				return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF));
+#elif defined(RTM_SSE2_INTRINSICS)
+				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+				__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+				__m128 x2y2_0_0_0 = _mm_add_ss(x2_y2_z2_w2, y2_0_0_0);
+				return _mm_shuffle_ps(x2y2_0_0_0, x2y2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON_INTRINSICS)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+				float32x2_t x2y2_x2y2 = vpadd_f32(x2_y2, x2_y2);
+				return vcombine_f32(x2y2_x2y2, x2y2_x2y2);
+#else
+				scalarf result = *this;
+				return vector_set(result);
+#endif
+			}
+
+			vector4f lhs;
+			vector4f rhs;
+		};
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// 2D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_dot2 RTM_SIMD_CALL vector_dot2(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_dot2{ lhs, rhs };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// 2D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_dot2_as_scalar(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+		return scalarf{ _mm_add_ss(x2_y2_z2_w2, y2_0_0_0) };
+#else
+		return vector_dot2(lhs, rhs);
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// 2D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_dot2_as_vector(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE4_INTRINSICS) && 0
+		// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+		return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF));
+#elif defined(RTM_SSE2_INTRINSICS)
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+		__m128 x2y2_0_0_0 = _mm_add_ss(x2_y2_z2_w2, y2_0_0_0);
+		return _mm_shuffle_ps(x2y2_0_0_0, x2y2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON_INTRINSICS)
+		float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+		float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+		float32x2_t x2y2_x2y2 = vpadd_f32(x2_y2, x2_y2);
+		return vcombine_f32(x2y2_x2y2, x2y2_x2y2);
+#else
+		return vector_set(vector_dot2_as_scalar(lhs, rhs));
+#endif
+	}
+
 	namespace rtm_impl
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -1161,7 +1813,7 @@ namespace rtm
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
 #if defined(RTM_SSE4_INTRINSICS) && 0
-				// SSE4 dot product instruction isn't precise enough
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
 				return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0x7F));
 #elif defined(RTM_SSE2_INTRINSICS)
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1184,6 +1836,7 @@ namespace rtm
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1194,10 +1847,11 @@ namespace rtm
 			}
 #endif
 
+			RTM_DEPRECATED("Use 'as_vector' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator vector4f() const RTM_NO_EXCEPT
 			{
 #if defined(RTM_SSE4_INTRINSICS) && 0
-				// SSE4 dot product instruction isn't precise enough
+				// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
 				return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF));
 #elif defined(RTM_SSE2_INTRINSICS)
 				__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
@@ -1206,6 +1860,12 @@ namespace rtm
 				__m128 z2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 2));
 				__m128 x2y2z2_0_0_0 = _mm_add_ss(x2y2_0_0_0, z2_0_0_0);
 				return _mm_shuffle_ps(x2y2z2_0_0_0, x2y2z2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON64_INTRINSICS)
+				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+				float32x4_t x2_y2_z2 = vsetq_lane_f32(0.0F, x2_y2_z2_w2, 3);
+				float32x4_t x2y2_z2_x2y2_z2 = vpaddq_f32(x2_y2_z2, x2_y2_z2);
+				float32x4_t x2y2z2_x2y2z2_x2y2z2_x2y2z2 = vpaddq_f32(x2y2_z2_x2y2_z2, x2y2_z2_x2y2_z2);
+				return x2y2z2_x2y2z2_x2y2z2_x2y2z2;
 #elif defined(RTM_NEON_INTRINSICS)
 				float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
 				float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
@@ -1234,6 +1894,56 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// 3D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_dot3_as_scalar(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+		__m128 x2y2_0_0_0 = _mm_add_ss(x2_y2_z2_w2, y2_0_0_0);
+		__m128 z2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 2));
+		return scalarf{ _mm_add_ss(x2y2_0_0_0, z2_0_0_0) };
+#else
+		return vector_dot3(lhs, rhs);
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// 3D dot product: lhs . rhs
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_dot3_as_vector(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE4_INTRINSICS) && 0
+		// SSE4 dot product instruction appears slower on Zen2, is it the case elsewhere as well?
+		return _mm_cvtss_f32(_mm_dp_ps(lhs, rhs, 0xFF));
+#elif defined(RTM_SSE2_INTRINSICS)
+		__m128 x2_y2_z2_w2 = _mm_mul_ps(lhs, rhs);
+		__m128 y2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 1));
+		__m128 x2y2_0_0_0 = _mm_add_ss(x2_y2_z2_w2, y2_0_0_0);
+		__m128 z2_0_0_0 = _mm_shuffle_ps(x2_y2_z2_w2, x2_y2_z2_w2, _MM_SHUFFLE(0, 0, 0, 2));
+		__m128 x2y2z2_0_0_0 = _mm_add_ss(x2y2_0_0_0, z2_0_0_0);
+		return _mm_shuffle_ps(x2y2z2_0_0_0, x2y2z2_0_0_0, _MM_SHUFFLE(0, 0, 0, 0));
+#elif defined(RTM_NEON64_INTRINSICS)
+		float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+		float32x4_t x2_y2_z2 = vsetq_lane_f32(0.0F, x2_y2_z2_w2, 3);
+		float32x4_t x2y2_z2_x2y2_z2 = vpaddq_f32(x2_y2_z2, x2_y2_z2);
+		float32x4_t x2y2z2_x2y2z2_x2y2z2_x2y2z2 = vpaddq_f32(x2y2_z2_x2y2_z2, x2y2_z2_x2y2_z2);
+		return x2y2z2_x2y2z2_x2y2z2_x2y2z2;
+#elif defined(RTM_NEON_INTRINSICS)
+		float32x4_t x2_y2_z2_w2 = vmulq_f32(lhs, rhs);
+		float32x2_t x2_y2 = vget_low_f32(x2_y2_z2_w2);
+		float32x2_t z2_w2 = vget_high_f32(x2_y2_z2_w2);
+		float32x2_t x2y2_x2y2 = vpadd_f32(x2_y2, x2_y2);
+		float32x2_t z2_z2 = vdup_lane_f32(z2_w2, 0);
+		float32x2_t x2y2z2_x2y2z2 = vadd_f32(x2y2_x2y2, z2_z2);
+		return vdupq_lane_f32(x2y2z2_x2y2z2, 0);
+#else
+		return vector_set(vector_dot3_as_scalar(lhs, rhs));
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the squared length/norm of the vector4.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_dot RTM_SIMD_CALL vector_length_squared(vector4f_arg0 input) RTM_NO_EXCEPT
@@ -1242,11 +1952,67 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector4.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_squared_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot_as_scalar(input, input);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector4.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_length_squared_as_vector(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot_as_vector(input, input);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector2.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_dot2 RTM_SIMD_CALL vector_length_squared2(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_dot2{ input, input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector2.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_squared2_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot2_as_scalar(input, input);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector2.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_length_squared2_as_vector(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot2_as_vector(input, input);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the squared length/norm of the vector3.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_dot3 RTM_SIMD_CALL vector_length_squared3(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		return rtm_impl::vector4f_vector_dot3{ input, input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector3.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_squared3_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot3_as_scalar(input, input);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the squared length/norm of the vector3.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_length_squared3_as_vector(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return vector_dot3_as_vector(input, input);
 	}
 
 	namespace rtm_impl
@@ -1261,14 +2027,15 @@ namespace rtm
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared(input);
+				const scalarf len_sq = vector_length_squared_as_scalar(input);
 				return scalar_cast(scalar_sqrt(len_sq));
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared(input);
+				const scalarf len_sq = vector_length_squared_as_scalar(input);
 				return scalar_sqrt(len_sq);
 			}
 #endif
@@ -1285,6 +2052,15 @@ namespace rtm
 		return rtm_impl::vector4f_vector_length{ input };
 	}
 
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the length/norm of the vector4.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		const scalarf len_sq = vector_length_squared_as_scalar(input);
+		return scalar_sqrt(len_sq);
+	}
+
 	namespace rtm_impl
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -1297,14 +2073,15 @@ namespace rtm
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared3(input);
+				const scalarf len_sq = vector_length_squared3_as_scalar(input);
 				return scalar_cast(scalar_sqrt(len_sq));
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared3(input);
+				const scalarf len_sq = vector_length_squared3_as_scalar(input);
 				return scalar_sqrt(len_sq);
 			}
 #endif
@@ -1321,6 +2098,15 @@ namespace rtm
 		return rtm_impl::vector4f_vector_length3{ input };
 	}
 
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the length/norm of the vector3.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length3_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		const scalarf len_sq = vector_length_squared3_as_scalar(input);
+		return scalar_sqrt(len_sq);
+	}
+
 	namespace rtm_impl
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -1333,14 +2119,15 @@ namespace rtm
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared(input);
+				const scalarf len_sq = vector_length_squared_as_scalar(input);
 				return scalar_cast(scalar_sqrt_reciprocal(len_sq));
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared(input);
+				const scalarf len_sq = vector_length_squared_as_scalar(input);
 				return scalar_sqrt_reciprocal(len_sq);
 			}
 #endif
@@ -1357,6 +2144,61 @@ namespace rtm
 		return rtm_impl::vector4f_vector_length_reciprocal{ input };
 	}
 
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the reciprocal length/norm of the vector4.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_reciprocal_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		const scalarf len_sq = vector_length_squared_as_scalar(input);
+		return scalar_sqrt_reciprocal(len_sq);
+	}
+
+	namespace rtm_impl
+	{
+		//////////////////////////////////////////////////////////////////////////
+		// This is a helper struct to allow a single consistent API between
+		// various vector types when the semantics are identical but the return
+		// type differs. Implicit coercion is used to return the desired value
+		// at the call site.
+		//////////////////////////////////////////////////////////////////////////
+		struct vector4f_vector_length_reciprocal2
+		{
+			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
+			{
+				const scalarf len_sq = vector_length_squared2_as_scalar(input);
+				return scalar_cast(scalar_sqrt_reciprocal(len_sq));
+			}
+
+#if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
+			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
+			{
+				const scalarf len_sq = vector_length_squared2_as_scalar(input);
+				return scalar_sqrt_reciprocal(len_sq);
+			}
+#endif
+
+			vector4f input;
+		};
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the reciprocal length/norm of the vector2.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE constexpr rtm_impl::vector4f_vector_length_reciprocal2 RTM_SIMD_CALL vector_length_reciprocal2(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		return rtm_impl::vector4f_vector_length_reciprocal2{ input };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the reciprocal length/norm of the vector2.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_reciprocal2_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		const scalarf len_sq = vector_length_squared2_as_scalar(input);
+		return scalar_sqrt_reciprocal(len_sq);
+	}
+
 	namespace rtm_impl
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -1369,14 +2211,15 @@ namespace rtm
 		{
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator float() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared3(input);
+				const scalarf len_sq = vector_length_squared3_as_scalar(input);
 				return scalar_cast(scalar_sqrt_reciprocal(len_sq));
 			}
 
 #if defined(RTM_SSE2_INTRINSICS)
+			RTM_DEPRECATED("Use 'as_scalar' suffix instead. To be removed in 2.4.")
 			RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE RTM_SIMD_CALL operator scalarf() const RTM_NO_EXCEPT
 			{
-				const scalarf len_sq = vector_length_squared3(input);
+				const scalarf len_sq = vector_length_squared3_as_scalar(input);
 				return scalar_sqrt_reciprocal(len_sq);
 			}
 #endif
@@ -1394,12 +2237,57 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns the reciprocal length/norm of the vector3.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_length_reciprocal3_as_scalar(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		const scalarf len_sq = vector_length_squared3_as_scalar(input);
+		return scalar_sqrt_reciprocal(len_sq);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns the distance between two 3D points.
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE rtm_impl::vector4f_vector_length3 RTM_SIMD_CALL vector_distance3(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
 	{
 		const vector4f difference = vector_sub(lhs, rhs);
 		return rtm_impl::vector4f_vector_length3{ difference };
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns the distance between two 3D points.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE scalarf RTM_SIMD_CALL vector_distance3_as_scalar(vector4f_arg0 lhs, vector4f_arg1 rhs) RTM_NO_EXCEPT
+	{
+		const vector4f difference = vector_sub(lhs, rhs);
+		return vector_length3_as_scalar(difference);
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a normalized vector2.
+	// If the length of the input is not finite or zero, the result is undefined.
+	// For a safe alternative, supply a fallback value and a threshold.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize2(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		// Reciprocal is more accurate to normalize with
+		const scalarf len_sq = vector_length_squared2_as_scalar(input);
+		return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a normalized vector2.
+	// If the length of the input is below the supplied threshold, the
+	// fall back value is returned instead.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize2(vector4f_arg0 input, vector4f_arg1 fallback, float threshold = 1.0E-8F) RTM_NO_EXCEPT
+	{
+		// Reciprocal is more accurate to normalize with
+		const scalarf len_sq = vector_length_squared2_as_scalar(input);
+		if (scalar_cast(len_sq) >= threshold)
+			return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
+		else
+			return fallback;
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1410,7 +2298,7 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize3(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 		// Reciprocal is more accurate to normalize with
-		const scalarf len_sq = vector_length_squared3(input);
+		const scalarf len_sq = vector_length_squared3_as_scalar(input);
 		return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
 	}
 
@@ -1422,7 +2310,34 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize3(vector4f_arg0 input, vector4f_arg1 fallback, float threshold = 1.0E-8F) RTM_NO_EXCEPT
 	{
 		// Reciprocal is more accurate to normalize with
-		const scalarf len_sq = vector_length_squared3(input);
+		const scalarf len_sq = vector_length_squared3_as_scalar(input);
+		if (scalar_cast(len_sq) >= threshold)
+			return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
+		else
+			return fallback;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a normalized vector4.
+	// If the length of the input is not finite or zero, the result is undefined.
+	// For a safe alternative, supply a fallback value and a threshold.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+		// Reciprocal is more accurate to normalize with
+		const scalarf len_sq = vector_length_squared_as_scalar(input);
+		return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// Returns a normalized vector4.
+	// If the length of the input is below the supplied threshold, the
+	// fall back value is returned instead.
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_normalize(vector4f_arg0 input, vector4f_arg1 fallback, float threshold = 1.0E-8F) RTM_NO_EXCEPT
+	{
+		// Reciprocal is more accurate to normalize with
+		const scalarf len_sq = vector_length_squared_as_scalar(input);
 		if (scalar_cast(len_sq) >= threshold)
 			return vector_mul(input, scalar_sqrt_reciprocal(len_sq));
 		else
@@ -1549,7 +2464,7 @@ namespace rtm
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_cmpeq_ps(lhs, rhs);
 #elif defined(RTM_NEON_INTRINSICS)
-		return vreinterpretq_f32_u32(vceqq_f32(lhs, rhs));
+		return vceqq_f32(lhs, rhs);
 #else
 		return mask4f{ rtm_impl::get_mask_value(lhs.x == rhs.x), rtm_impl::get_mask_value(lhs.y == rhs.y), rtm_impl::get_mask_value(lhs.z == rhs.z), rtm_impl::get_mask_value(lhs.w == rhs.w) };
 #endif
@@ -1563,7 +2478,7 @@ namespace rtm
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_cmplt_ps(lhs, rhs);
 #elif defined(RTM_NEON_INTRINSICS)
-		return vreinterpretq_f32_u32(vcltq_f32(lhs, rhs));
+		return vcltq_f32(lhs, rhs);
 #else
 		return mask4f{ rtm_impl::get_mask_value(lhs.x < rhs.x), rtm_impl::get_mask_value(lhs.y < rhs.y), rtm_impl::get_mask_value(lhs.z < rhs.z), rtm_impl::get_mask_value(lhs.w < rhs.w) };
 #endif
@@ -1577,7 +2492,7 @@ namespace rtm
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_cmple_ps(lhs, rhs);
 #elif defined(RTM_NEON_INTRINSICS)
-		return vreinterpretq_f32_u32(vcleq_f32(lhs, rhs));
+		return vcleq_f32(lhs, rhs);
 #else
 		return mask4f{ rtm_impl::get_mask_value(lhs.x <= rhs.x), rtm_impl::get_mask_value(lhs.y <= rhs.y), rtm_impl::get_mask_value(lhs.z <= rhs.z), rtm_impl::get_mask_value(lhs.w <= rhs.w) };
 #endif
@@ -1591,7 +2506,7 @@ namespace rtm
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_cmpgt_ps(lhs, rhs);
 #elif defined(RTM_NEON_INTRINSICS)
-		return vreinterpretq_f32_u32(vcgtq_f32(lhs, rhs));
+		return vcgtq_f32(lhs, rhs);
 #else
 		return mask4f{ rtm_impl::get_mask_value(lhs.x > rhs.x), rtm_impl::get_mask_value(lhs.y > rhs.y), rtm_impl::get_mask_value(lhs.z > rhs.z), rtm_impl::get_mask_value(lhs.w > rhs.w) };
 #endif
@@ -1605,7 +2520,7 @@ namespace rtm
 #if defined(RTM_SSE2_INTRINSICS)
 		return _mm_cmpge_ps(lhs, rhs);
 #elif defined(RTM_NEON_INTRINSICS)
-		return vreinterpretq_f32_u32(vcgeq_f32(lhs, rhs));
+		return vcgeq_f32(lhs, rhs);
 #else
 		return mask4f{ rtm_impl::get_mask_value(lhs.x >= rhs.x), rtm_impl::get_mask_value(lhs.y >= rhs.y), rtm_impl::get_mask_value(lhs.z >= rhs.z), rtm_impl::get_mask_value(lhs.w >= rhs.w) };
 #endif
@@ -2320,6 +3235,39 @@ namespace rtm
 	}
 
 	//////////////////////////////////////////////////////////////////////////
+	// Returns per component ~0 if input is finite, otherwise 0: finite(input) ? ~0 : 0
+	//////////////////////////////////////////////////////////////////////////
+	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE mask4f RTM_SIMD_CALL vector_finite(vector4f_arg0 input) RTM_NO_EXCEPT
+	{
+#if defined(RTM_SSE2_INTRINSICS)
+		const __m128i abs_mask = _mm_set_epi32(0x7FFFFFFFULL, 0x7FFFFFFFULL, 0x7FFFFFFFULL, 0x7FFFFFFFULL);
+		__m128 abs_input = _mm_and_ps(input, _mm_castsi128_ps(abs_mask));
+
+		const __m128 infinity = _mm_set_ps1(std::numeric_limits<float>::infinity());
+		__m128 is_not_infinity = _mm_cmpneq_ps(abs_input, infinity);
+
+		__m128 is_nan = _mm_cmpneq_ps(input, input);
+
+		__m128 is_finite = _mm_andnot_ps(is_nan, is_not_infinity);
+		return is_finite;
+#elif defined(RTM_NEON_INTRINSICS)
+		const float32x4_t abs_input = vabsq_f32(input);
+		const float32x4_t infinity = vdupq_n_f32(std::numeric_limits<float>::infinity());
+		const uint32x4_t is_not_infinity = vmvnq_u32(vceqq_f32(abs_input, infinity));
+		const uint32x4_t is_not_nan = vceqq_f32(input, input);
+		const uint32x4_t is_finite = vandq_u32(is_not_infinity, is_not_nan);
+		return is_finite;
+#else
+		return mask4f{
+			rtm_impl::get_mask_value(scalar_is_finite(vector_get_x(input))),
+			rtm_impl::get_mask_value(scalar_is_finite(vector_get_y(input))),
+			rtm_impl::get_mask_value(scalar_is_finite(vector_get_z(input))),
+			rtm_impl::get_mask_value(scalar_is_finite(vector_get_w(input)))
+			};
+#endif
+	}
+
+	//////////////////////////////////////////////////////////////////////////
 	// Returns true if all 4 components are finite (not NaN/Inf), otherwise false: all(finite(input))
 	//////////////////////////////////////////////////////////////////////////
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE bool RTM_SIMD_CALL vector_is_finite(vector4f_arg0 input) RTM_NO_EXCEPT
@@ -2603,10 +3551,27 @@ namespace rtm
 #endif // defined(RTM_NEON_INTRINSICS)
 
         // Slow code path, not yet optimized or not using intrinsics
-		const float x = rtm_impl::is_mix_xyzw(comp0) ? vector_get_component<comp0>(input0) : vector_get_component<comp0>(input1);
-		const float y = rtm_impl::is_mix_xyzw(comp1) ? vector_get_component<comp1>(input0) : vector_get_component<comp1>(input1);
-		const float z = rtm_impl::is_mix_xyzw(comp2) ? vector_get_component<comp2>(input0) : vector_get_component<comp2>(input1);
-		const float w = rtm_impl::is_mix_xyzw(comp3) ? vector_get_component<comp3>(input0) : vector_get_component<comp3>(input1);
+		constexpr component4 component0 = rtm_impl::mix_to_component(comp0);
+		constexpr component4 component1 = rtm_impl::mix_to_component(comp1);
+		constexpr component4 component2 = rtm_impl::mix_to_component(comp2);
+		constexpr component4 component3 = rtm_impl::mix_to_component(comp3);
+
+		const float x0 = vector_get_component(input0, component0);
+		const float x1 = vector_get_component(input1, component0);
+		const float x = rtm_impl::is_mix_xyzw(comp0) ? x0 : x1;
+
+		const float y0 = vector_get_component(input0, component1);
+		const float y1 = vector_get_component(input1, component1);
+		const float y = rtm_impl::is_mix_xyzw(comp1) ? y0 : y1;
+
+		const float z0 = vector_get_component(input0, component2);
+		const float z1 = vector_get_component(input1, component2);
+		const float z = rtm_impl::is_mix_xyzw(comp2) ? z0 : z1;
+
+		const float w0 = vector_get_component(input0, component3);
+		const float w1 = vector_get_component(input1, component3);
+		const float w = rtm_impl::is_mix_xyzw(comp3) ? w0 : w1;
+
 		return vector_set(x, y, z, w);
 	}
 
@@ -2651,11 +3616,11 @@ namespace rtm
 	#pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
 
-		const uint32_t* input0_ = reinterpret_cast<const uint32_t*>(&input0);
-		const uint32_t* input1_ = reinterpret_cast<const uint32_t*>(&input1);
+		const uint32_t* input0_ = rtm_impl::bit_cast<const uint32_t*>(&input0);
+		const uint32_t* input1_ = rtm_impl::bit_cast<const uint32_t*>(&input1);
 
 		vector4f result;
-		uint32_t* result_ = reinterpret_cast<uint32_t*>(&result);
+		uint32_t* result_ = rtm_impl::bit_cast<uint32_t*>(&result);
 
 		result_[0] = input0_[0] & input1_[0];
 		result_[1] = input0_[1] & input1_[1];
@@ -2687,11 +3652,11 @@ namespace rtm
 	#pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
 
-		const uint32_t* input0_ = reinterpret_cast<const uint32_t*>(&input0);
-		const uint32_t* input1_ = reinterpret_cast<const uint32_t*>(&input1);
+		const uint32_t* input0_ = rtm_impl::bit_cast<const uint32_t*>(&input0);
+		const uint32_t* input1_ = rtm_impl::bit_cast<const uint32_t*>(&input1);
 
 		vector4f result;
-		uint32_t* result_ = reinterpret_cast<uint32_t*>(&result);
+		uint32_t* result_ = rtm_impl::bit_cast<uint32_t*>(&result);
 
 		result_[0] = input0_[0] | input1_[0];
 		result_[1] = input0_[1] | input1_[1];
@@ -2723,11 +3688,11 @@ namespace rtm
 	#pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
 
-		const uint32_t* input0_ = reinterpret_cast<const uint32_t*>(&input0);
-		const uint32_t* input1_ = reinterpret_cast<const uint32_t*>(&input1);
+		const uint32_t* input0_ = rtm_impl::bit_cast<const uint32_t*>(&input0);
+		const uint32_t* input1_ = rtm_impl::bit_cast<const uint32_t*>(&input1);
 
 		vector4f result;
-		uint32_t* result_ = reinterpret_cast<uint32_t*>(&result);
+		uint32_t* result_ = rtm_impl::bit_cast<uint32_t*>(&result);
 
 		result_[0] = input0_[0] ^ input1_[0];
 		result_[1] = input0_[1] ^ input1_[1];
@@ -2754,8 +3719,8 @@ namespace rtm
 	RTM_DISABLE_SECURITY_COOKIE_CHECK RTM_FORCE_INLINE vector4f RTM_SIMD_CALL vector_sign(vector4f_arg0 input) RTM_NO_EXCEPT
 	{
 #if defined(RTM_SSE2_INTRINSICS)
-		constexpr __m128 signs = { -0.0F, -0.0F, -0.0F, -0.0F };
-		constexpr __m128 one = { 1.0F, 1.0F, 1.0F, 1.0F };
+		constexpr __m128 signs = RTM_VECTOR4F_MAKE(-0.0F, -0.0F, -0.0F, -0.0F);
+		constexpr __m128 one = RTM_VECTOR4F_MAKE(1.0F, 1.0F, 1.0F, 1.0F);
 		const __m128 sign_bits = _mm_and_ps(input, signs);	// Mask out the sign bit
 		return _mm_or_ps(sign_bits, one);					// Copy the sign bit onto +-1.0f
 #else

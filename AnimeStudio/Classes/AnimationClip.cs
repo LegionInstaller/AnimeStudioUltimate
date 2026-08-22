@@ -908,7 +908,75 @@ namespace AnimeStudio
             if (reader.Game.Type.IsZZZ())
             {
                 m_databaseData = reader.ReadUInt8Array();
+                if (m_databaseData.Length >= 4)
+                {
+                    var databaseHeaderSize = BitConverter.ToUInt32(m_databaseData);
+                    if (m_databaseData.Length != (int)databaseHeaderSize)
+                    {
+                        Logger.Warning($"m_databaseData buffer/header size mismatch: {m_databaseData.Length} != {databaseHeaderSize}");
+                    }
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// ZZZ stores its transform and scalar tracks as two separate compressed_tracks blobs inside
+    /// m_ClipData: the transform blob first, then the scalar blob at the next 16-byte boundary.
+    /// Each blob starts with its own uint32 size. The stock decoder expects a single blob, which is
+    /// why ZZZ needs its own clip type and its own native entry point.
+    /// </summary>
+    public class ZZZACLClip : MHYACLClip
+    {
+        /// <summary>Database bulk data, attached from the clip's streamed resource when present.</summary>
+        public byte[] m_DatabaseData;
+
+        public ZZZACLClip()
+        {
+            m_DatabaseData = Array.Empty<byte>();
+        }
+
+        public byte[] m_TransformData => ReadBlob(0, "transform");
+
+        public byte[] m_ScalarData
+        {
+            get
+            {
+                var transformSize = BlobSize(0);
+                if (transformSize <= 0 || m_ClipData.Length <= transformSize)
+                {
+                    return null;
+                }
+
+                var scalarOffset = 16 * ((transformSize + 15) / 16);
+                if (m_ClipData.Length <= scalarOffset)
+                {
+                    // Aligned padding only -- this clip has no scalar tracks.
+                    return null;
+                }
+
+                return ReadBlob(scalarOffset, "scalar");
+            }
+        }
+
+        private int BlobSize(int offset)
+        {
+            if (m_ClipData == null || offset < 0 || m_ClipData.Length < offset + 4)
+            {
+                return -1;
+            }
+            return (int)BitConverter.ToUInt32(m_ClipData, offset);
+        }
+
+        private byte[] ReadBlob(int offset, string name)
+        {
+            var size = BlobSize(offset);
+            if (size <= 0 || offset + size > m_ClipData.Length)
+            {
+                Logger.Warning($"ZZZACLClip {name} blob at offset {offset} declares {size} bytes but only {(m_ClipData?.Length ?? 0) - offset} are available; skipping.");
+                return null;
+            }
+            return new ArraySegment<byte>(m_ClipData, offset, size).ToArray();
         }
     }
 
@@ -1408,7 +1476,13 @@ namespace AnimeStudio
             {
                 var m_CompressedCurveCount = reader.ReadUInt32();
             }
-            if (reader.Game.Type.IsGIGroup() || reader.Game.Type.IsBH3Group() || reader.Game.Type.IsZZZCB1() || reader.Game.Type.IsZZZ())
+            if (reader.Game.Type.IsZZZ())
+            {
+                // Same wire format as MHYACLClip, but m_ClipData holds two blobs -- see ZZZACLClip.
+                m_ACLClip = new ZZZACLClip();
+                m_ACLClip.Read(reader);
+            }
+            if (reader.Game.Type.IsGIGroup() || reader.Game.Type.IsBH3Group() || reader.Game.Type.IsZZZCB1())
             {
                 m_ACLClip = new MHYACLClip();
                 m_ACLClip.Read(reader);
@@ -2204,21 +2278,42 @@ namespace AnimeStudio
             {
                 reader.AlignStream();
             }
-            if (hasStreamingInfo)
+            // GI marks streamed data with a negative muscleClipSize, which sets hasStreamingInfo.
+            // ZZZ never sets that marker, but still appends a StreamingInfo record when its ACL
+            // database is stripped out of the clip. Gate that on there being a whole record left in
+            // the object: reading it unconditionally consumes garbage on ZZZ clips that carry their
+            // database inline, and skipping it entirely loses the bulk data on the ones that do not.
+            var aclClip = m_MuscleClip?.m_Clip?.m_ACLClip;
+            var minStreamingInfoSize = (version[0] >= 2020 ? 8 : 4) + 4 + 4;
+            var hasZZZStreamData = aclClip is ZZZACLClip && reader.BytesLeft() >= minStreamingInfoSize;
+
+            if (hasStreamingInfo || hasZZZStreamData)
             {
                 m_StreamData = new StreamingInfo(reader);
                 if (!string.IsNullOrEmpty(m_StreamData?.path))
                 {
-                    var aclClip = m_MuscleClip.m_Clip.m_ACLClip as GIACLClip;
-
                     var resourceReader = new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size);
-                    using var ms = new MemoryStream();
-                    ms.Write(aclClip.m_DatabaseData);
-
-                    ms.Write(resourceReader.GetData());
-                    ms.AlignStream();
-
-                    aclClip.m_DatabaseData = ms.ToArray();
+                    switch (aclClip)
+                    {
+                        case ZZZACLClip zzzClip:
+                            // ZZZ keeps the database header and its bulk data in separate buffers.
+                            zzzClip.m_DatabaseData = resourceReader.GetData();
+                            break;
+                        case GIACLClip giClip:
+                            // GI expects the bulk data appended directly behind the database blob.
+                            using (var ms = new MemoryStream())
+                            {
+                                ms.Write(giClip.m_DatabaseData);
+                                ms.Write(resourceReader.GetData());
+                                ms.AlignStream();
+                                giClip.m_DatabaseData = ms.ToArray();
+                            }
+                            break;
+                    }
+                }
+                else if (hasZZZStreamData)
+                {
+                    Logger.Warning($"AnimationClip {Name} declared streamed ACL data but carried no path.");
                 }
             }
         }

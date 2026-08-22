@@ -66,7 +66,11 @@
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
 		<PackageReference Include="OpenTK" Version="4.9.4" />
 		<PackageReference Include="OpenTK.GLControl" Version="4.0.2" />
-		<PackageReference Include="System.Drawing.Common" Version="10.0.9" />
+		<!-- Must track the target framework. The 10.x package carries the .NET 10 WinForms
+		     internals (System.Private.Windows.Core 10.0.0.0), which the .NET 9 WinForms in the
+		     shared framework cannot load, so the net9 build crashes in ScaleHelper on startup. -->
+		<PackageReference Include="System.Drawing.Common" Version="10.0.9" Condition="'$(TargetFramework)' == 'net10.0-windows'" />
+		<PackageReference Include="System.Drawing.Common" Version="9.0.9" Condition="'$(TargetFramework)' == 'net9.0-windows'" />
 	</ItemGroup>
 
 	<ItemGroup>

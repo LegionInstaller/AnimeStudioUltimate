@@ -34,6 +34,25 @@ namespace AnimeStudio
             Logger.Verbose($"File {path} type is {FileType}");
         }
 
+        /// <summary>
+        /// Reads a signature at a fixed offset, or returns an empty array when the stream is too
+        /// short to hold one. Probing is not an error: a 32 byte stream simply is not a Brotli
+        /// file. ReadBytes itself refuses oversized reads (they mean a bad length field elsewhere),
+        /// so the length has to be checked here rather than caught.
+        /// </summary>
+        private byte[] ReadSignature(long offset, int length)
+        {
+            if (offset < 0 || length < 0 || offset + length > Length)
+            {
+                Position = 0;
+                return Array.Empty<byte>();
+            }
+            Position = offset;
+            var magic = ReadBytes(length);
+            Position = 0;
+            return magic;
+        }
+
         private FileType CheckFileType()
         {
             var signature = this.ReadStringToNull(20);
@@ -61,18 +80,14 @@ namespace AnimeStudio
                             Position = 0;
                             return FileType.VFSFile;
                         }
-                        Position = 0;
-                        byte[] magic = ReadBytes(2);
-                        Position = 0;
+                        byte[] magic = ReadSignature(0, 2);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (gzipMagic.SequenceEqual(magic))
                         {
                             return FileType.GZipFile;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(gzipMagic)}");
-                        Position = 0x20;
-                        magic = ReadBytes(6);
-                        Position = 0;
+                        magic = ReadSignature(0x20, 6);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (brotliMagic.SequenceEqual(magic))
                         {
@@ -83,8 +98,7 @@ namespace AnimeStudio
                         {
                             return FileType.AssetsFile;
                         }
-                        magic = ReadBytes(4);
-                        Position = 0;
+                        magic = ReadSignature(0, 4);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (zipMagic.SequenceEqual(magic) || zipSpannedMagic.SequenceEqual(magic))
                         {
@@ -106,8 +120,7 @@ namespace AnimeStudio
                             return FileType.Blb3File;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(blb3Magic)}");
-                        magic = ReadBytes(7);
-                        Position = 0;
+                        magic = ReadSignature(0, 7);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (hygMagic.SequenceEqual(magic))
                         {
@@ -119,8 +132,7 @@ namespace AnimeStudio
                             return FileType.BundleFile;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(narakaMagic)}");
-                        magic = ReadBytes(9);
-                        Position = 0;
+                        magic = ReadSignature(0, 9);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (gunfireMagic.SequenceEqual(magic))
                         {

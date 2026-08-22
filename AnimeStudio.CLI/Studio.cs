@@ -20,6 +20,10 @@ namespace AnimeStudio.CLI
         AssetMap = 4,
         Both = 8,
         All = Both | Load,
+        // The dispatch in Program.cs tests these as flag combinations, but the command line
+        // parser only accepts a single named value, which left both load paths unreachable.
+        LoadCABMap = CABMap | Load,
+        LoadAssetMap = AssetMap | Load,
     }
 
     internal static class Studio

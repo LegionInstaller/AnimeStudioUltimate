@@ -414,7 +414,22 @@ namespace AnimeStudio
             m_TOS = new Dictionary<uint, string>();
             for (int i = 0; i < numTOS; i++)
             {
-                m_TOS.Add(reader.ReadUInt32(), reader.ReadAlignedString());
+                var hash = reader.ReadUInt32();
+                var path = reader.ReadAlignedString();
+
+                // ZZZ ships avatars whose TOS repeats a hash. Add() would throw and take the whole
+                // avatar with it -- and an avatar that fails to parse also loses its SeparateMesh
+                // attachment later on, which is what makes _Model bundles come out empty.
+                if (m_TOS.TryGetValue(hash, out var existing))
+                {
+                    if (existing != path)
+                    {
+                        Logger.Verbose($"Avatar TOS hash {hash} maps to both '{existing}' and '{path}', keeping the first");
+                    }
+                    continue;
+                }
+
+                m_TOS[hash] = path;
             }
 
             // finally implemented the humandescription, not particularly useful but hey one step closer to being able to export to unity ready files

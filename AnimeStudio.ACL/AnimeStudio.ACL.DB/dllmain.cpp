@@ -118,17 +118,46 @@ AS_API(void) DecompressTracks(void* data, void* database, void* streamer, decomp
 
 	auto compressed_database = make_compressed_database(database, &database_error);
 
-	if (database_error.empty())
+	if (database_error.empty() && compressed_database != nullptr)
 	{
-		const uint8_t* medium_bulk_data = (const uint8_t*)streamer;
-		const uint8_t* low_bulk_data = (const uint8_t*)add_offset_to_ptr<void>(streamer, align_to(compressed_database->get_bulk_data_size(quality_tier::medium_importance), 4));
+		if (compressed_database->is_bulk_data_inline())
+		{
+			// Bulk data sits inside the database blob; no streamer needed.
+			databasse_context->initialize(Allocator, *compressed_database);
+		}
+		else
+		{
+			// The caller may hand us the bulk data separately. When it does not, the managed side
+			// has appended it directly behind the database blob (see GIACLClip.m_DatabaseData),
+			// so derive the pointer instead of passing null -- a null streamer leaves
+			// debug_database_streamer uninitialized and the database silently unused.
+			const uint8_t* bulk_data = (const uint8_t*)streamer;
+			if (bulk_data == nullptr)
+				bulk_data = add_offset_to_ptr<const uint8_t>(database, compressed_database->get_size());
 
-		debug_database_streamer* medium_database_streamer = new debug_database_streamer(Allocator, medium_bulk_data, compressed_database->get_bulk_data_size(quality_tier::medium_importance));
-		debug_database_streamer* low_database_streamer = new debug_database_streamer(Allocator, low_bulk_data, compressed_database->get_bulk_data_size(quality_tier::lowest_importance));
+			const uint32_t medium_size = compressed_database->get_bulk_data_size(quality_tier::medium_importance);
+			const uint32_t low_size = compressed_database->get_bulk_data_size(quality_tier::lowest_importance);
 
-		databasse_context->initialize(Allocator, *compressed_database, *medium_database_streamer, *low_database_streamer);
-		databasse_context->stream_in(quality_tier::medium_importance);
-		databasse_context->stream_in(quality_tier::lowest_importance);
+			const uint8_t* medium_bulk_data = medium_size != 0 ? bulk_data : nullptr;
+			const uint8_t* low_bulk_data = low_size != 0 ? bulk_data + align_to(medium_size, 4) : nullptr;
+
+			debug_database_streamer* medium_database_streamer = new debug_database_streamer(Allocator, medium_bulk_data, medium_size);
+			debug_database_streamer* low_database_streamer = new debug_database_streamer(Allocator, low_bulk_data, low_size);
+
+			databasse_context->initialize(Allocator, *compressed_database, *medium_database_streamer, *low_database_streamer);
+			if (medium_size != 0)
+				databasse_context->stream_in(quality_tier::medium_importance);
+			if (low_size != 0)
+				databasse_context->stream_in(quality_tier::lowest_importance);
+
+			// Decompression below only ever reads through the database context when it reports
+			// itself initialized, so falling back to the plain (database-less) path is safe.
+			if (!databasse_context->is_initialized())
+			{
+				delete medium_database_streamer;
+				delete low_database_streamer;
+			}
+		}
 	}
 
 	auto compressed_track = make_compressed_tracks(data, &tracks_error);

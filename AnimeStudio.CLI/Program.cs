@@ -47,7 +47,18 @@ namespace AnimeStudio.CLI
                 AssetsHelper.Minimal = Settings.Default.minimalAssetMap;
                 AssetsHelper.SetUnityVersion(o.UnityVersion);
 
-                TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Settings.Default.types));
+                try
+                {
+                    TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Settings.Default.types));
+                }
+                catch (JsonException)
+                {
+                    // The CLI reads its settings from App.config, so a type list written for another
+                    // version of Studio would otherwise abort the run before anything is exported.
+                    // Leaving the filter unset makes TypeFlags permit every type, which is the
+                    // sensible fallback for a batch tool -- --types still narrows it down.
+                    Logger.Warning("The \"types\" setting in App.config is invalid, it was most likely written by another version of Studio. Continuing with all types enabled.");
+                }
 
                 var classTypeFilter = Array.Empty<ClassIDType>();
                 if (!o.TypeFilter.IsNullOrEmpty())
@@ -146,14 +157,17 @@ namespace AnimeStudio.CLI
 
                 if (o.MapOp.HasFlag(MapOpType.CABMap))
                 {
+                    // The Load flag selects loading, as it does for AssetMap below. These two
+                    // branches used to be the other way round, so --map_op CABMap tried to read a
+                    // map that had never been written and --map_op "CABMap Load" rebuilt it.
                     if (o.MapOp.HasFlag(MapOpType.Load))
-                    {
-                        AssetsHelper.BuildCABMap(files, o.MapName, o.Input.FullName, game);
-                    }
-                    else
                     {
                         AssetsHelper.LoadCABMapInternal(o.MapName);
                         assetsManager.ResolveDependencies = true;
+                    }
+                    else
+                    {
+                        AssetsHelper.BuildCABMap(files, o.MapName, o.Input.FullName, game);
                     }
                 }
                 if (o.MapOp.HasFlag(MapOpType.AssetMap))

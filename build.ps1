@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # prepare patcher
 dotnet build AnimeStudio.Patcher -c Release -f net10.0
@@ -66,8 +66,22 @@ foreach ($tfm in 'net9.0-windows', 'net10.0-windows') {
     if ($LASTEXITCODE -ne 0) { throw "GUI patch failed ($tfm)" }
 
     # prepare output dir
+    # Maps\ is written next to the launcher at runtime and can hold hours of CAB/asset map
+    # building, so carry it across the wipe instead of destroying it on every rebuild.
+    $mapsDir = Join-Path $outputDir 'Maps'
+    $mapsStash = $null
+    if (Test-Path $mapsDir) {
+        $mapsStash = Join-Path ([System.IO.Path]::GetTempPath()) ("as-maps-" + [Guid]::NewGuid().ToString('N'))
+        Move-Item $mapsDir $mapsStash
+    }
+
     Reset-Dir $outputDir
     New-Item -ItemType Directory -Force "$outputDir/bin" | Out-Null
+
+    if ($mapsStash) {
+        Move-Item $mapsStash $mapsDir
+        Write-Host "Preserved existing Maps\ in $outputDir" -ForegroundColor DarkGray
+    }
 
     # copy to output
     Copy-Item "$cliOut/*" "$outputDir/bin" -Recurse -Force

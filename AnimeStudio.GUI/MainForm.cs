@@ -271,7 +271,27 @@ namespace AnimeStudio.GUI
                 Studio.Game = GameManager.GetGame(Properties.Settings.Default.selectedGame);
             }
 
-            TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Properties.Settings.Default.types));
+            try
+            {
+                TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Properties.Settings.Default.types));
+            }
+            catch (JsonException)
+            {
+                // Type settings saved by another version of Studio can contain unknown types, which would otherwise keep the app from starting.
+                Logger.Warning("The saved type settings (Options > Export options) are invalid, they were most likely saved by another version of Studio. Resetting them to default, your type selection is lost.");
+                try
+                {
+                    Properties.Settings.Default.types = (string)Properties.Settings.Default.Properties["types"].DefaultValue;
+                    Properties.Settings.Default.Save();
+                    TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Properties.Settings.Default.types));
+                }
+                catch (Exception)
+                {
+                    Logger.Warning("Resetting the type settings failed, resetting all settings to default.");
+                    Properties.Settings.Default.Reset();
+                    TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Properties.Settings.Default.types));
+                }
+            }
             Logger.Info($"Target Game is {Studio.Game.Type}");
 
             if (Studio.Game.IsUnityCN())
@@ -901,7 +921,12 @@ namespace AnimeStudio.GUI
             {
                 foreach (TreeNode node in treeNode.Nodes)
                 {
-                    return HasGameObjectNode(node);
+                    // Returning here unconditionally stopped after the first child, so a node whose
+                    // animator sits under a later sibling was reported as having none.
+                    if (HasGameObjectNode(node))
+                    {
+                        return true;
+                    }
                 }
                 return false;
             }
@@ -2071,7 +2096,9 @@ namespace AnimeStudio.GUI
             }
             else
             {
-                visibleAssets = exportableAssets;
+                // Copy, not alias: the models-only pass below Removes from this list, and the column
+                // sorts reorder it. Aliasing exportableAssets made those changes permanent.
+                visibleAssets = new List<AssetItem>(exportableAssets);
             }
             if (Properties.Settings.Default.modelsOnly)
             {
@@ -2608,7 +2635,7 @@ namespace AnimeStudio.GUI
 
         private void loggedEventsMenuItem_DropDownClosed(object sender, EventArgs e)
         {
-            Properties.Settings.Default.loggerEventType = loggedEventsMenuItem.DropDownItems.Cast<ToolStripMenuItem>().Select(x => x.Checked ? (int)x.Tag : 0).Sum();
+            Properties.Settings.Default.loggerEventType = loggedEventsMenuItem.DropDownItems.Cast<ToolStripMenuItem>().Select(x => x.Checked && x.Tag is LoggerEvent loggerEvent ? (int)loggerEvent : 0).Sum();
             Properties.Settings.Default.Save();
 
             Logger.Flags = (LoggerEvent)Properties.Settings.Default.loggerEventType;

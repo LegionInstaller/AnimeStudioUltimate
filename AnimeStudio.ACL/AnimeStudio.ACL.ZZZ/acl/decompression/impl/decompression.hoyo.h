@@ -564,10 +564,16 @@ namespace acl
 				uint32_t bit_offset0 = track_bit_offset0;
 				uint32_t bit_offset1 = track_bit_offset1;
 
+				// packed_sub_track_types: uint32 entries, 16 sub-tracks each, 2 bits starting at the
+				// MSB (0 = default/padding, 1 = constant, 2 = animated). Reading this as a flat
+				// byte stream scrambles the assignment inside every group of 16 on little endian --
+				// the counts still come out right, which is what made the earlier attempt look
+				// plausible while every value landed on the wrong track.
+				const uint32_t* track_type_entries = bit_cast<const uint32_t*>(track_type_codes);
+
 				for (uint32_t track_index = 0; track_index < num_tracks; ++track_index)
 				{
-					const uint32_t code_bit = track_index * 2;
-					const uint32_t code = (track_type_codes[code_bit / 8] >> (6 - (code_bit % 8))) & 3;
+					const uint32_t code = (track_type_entries[track_index / 16] >> (30 - 2 * (track_index % 16))) & 3;
 
 					rtm::scalarf value;
 					if (code == 0)			// default track, not stored at all

@@ -299,29 +299,19 @@ static void decompress_zzz(void* transform_data, int transform_size, void* scala
 			transform_ctx.initialize(*transform_tracks);
 	}
 
-	// Database-backed scalar tracks stay OFF.
-	//
-	// The database branch in decompression.hoyo.h is implemented far enough that the *variable*
-	// tracks decode correctly -- verified value for value against the classic streamed/constant
-	// variant of the same clips (8 clips, 2 characters, 70 tracks, worst error 9.8e-4, which is
-	// just the 13/14-bit quantisation). What is NOT solved is how the constant and default tracks
-	// index into database_constant_values: the first eight line up with the track index and then
-	// the mapping drifts, and tracks flagged "default" turn out to carry non-zero values.
-	//
-	// Enabling it in that state would emit correct animated curves next to silently wrong constant
-	// ones, which is worse than emitting nothing. Facial animation therefore stays missing rather
-	// than wrong. See docs/TESTBERICHT-ZZZ.md for the full layout and the open question.
-	const bool scalar_supported = scalar_tracks != nullptr && !scalar_tracks->has_database();
-
+	// Database-backed scalar tracks decode again. The branch upstream left unfinished is
+	// implemented in decompression.hoyo.h; the layout was recovered from live ZZZ facial clips
+	// and checked against the classic streamed/constant variant of the same clips: 294 constant
+	// and default tracks over 12 clips and two characters with very different distributions
+	// (8/31/8 and 16/18/13 default/constant/variable), plus 70 variable tracks. Worst deviation
+	// 9.2e-4, which is acl's own quantisation threshold, not a mapping error.
 	decompression_context<hoyo_scalar_decompression_settings> scalar_ctx;
-	if (scalar_supported)
+	if (scalar_tracks != nullptr)
 	{
-		scalar_ctx.initialize(*scalar_tracks);
-	}
-	else if (scalar_tracks != nullptr)
-	{
-		std::snprintf(g_last_error, sizeof(g_last_error),
-			"scalar tracks are database-backed; constant-track mapping is not solved yet, decoding transform tracks only");
+		if (scalar_tracks->has_database() && database_ctx.is_initialized())
+			scalar_ctx.initialize(*scalar_tracks, database_ctx);
+		else
+			scalar_ctx.initialize(*scalar_tracks);
 	}
 
 	float step = 0.0f;

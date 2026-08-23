@@ -208,7 +208,7 @@ namespace AnimeStudio.GUI
 
         private void InitializeLogger()
         {
-            logger = new GUILogger(StatusStripUpdate);
+            logger = new GUILogger(StatusStripUpdate, ShowErrorDialog);
             ConsoleHelper.AllocConsole();
             ConsoleHelper.SetConsoleTitle("Debug Console");
             var handle = ConsoleHelper.GetConsoleWindow();
@@ -1686,26 +1686,92 @@ namespace AnimeStudio.GUI
 
             if (InvokeRequired)
             {
-                var result = BeginInvoke(new Action(() => { progressBar1.Value = value; }));
-                result.AsyncWaitHandle.WaitOne();
+                // Fire and forget, like StatusStripUpdate: waiting on the handle turned every
+                // progress tick into a synchronous hop to the UI thread.
+                try
+                {
+                    BeginInvoke(new Action(() => { progressBar1.Value = value; }));
+                }
+                catch (Exception)
+                {
+                    // Form closed while a background operation was still reporting.
+                }
             }
             else
             {
                 progressBar1.Value = value;
             }
         }
+        private string pendingStatusText;
+        private int statusUpdateQueued;
 
+        /// <summary>
+        /// Shows a status message without blocking the caller.
+        /// </summary>
+        /// <remarks>
+        /// This used to BeginInvoke and then wait on the returned handle, which is a synchronous
+        /// hop to the UI thread. Every log line goes through here, so with loading spread across
+        /// worker threads all of them queued up behind the message pump for each line. Only one
+        /// post is ever in flight now and it always paints the newest text, so a burst of
+        /// messages costs one repaint instead of one repaint per message.
+        /// </remarks>
         private void StatusStripUpdate(string statusText)
+        {
+            Volatile.Write(ref pendingStatusText, statusText);
+
+            if (!InvokeRequired)
+            {
+                toolStripStatusLabel1.Text = statusText;
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref statusUpdateQueued, 1, 0) != 0)
+            {
+                // A post is already on its way and it will pick up the text written above.
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    // Cleared first: a writer racing with this paint queues a fresh post
+                    // rather than having its message dropped.
+                    Volatile.Write(ref statusUpdateQueued, 0);
+                    var text = Volatile.Read(ref pendingStatusText);
+                    if (text != null)
+                    {
+                        toolStripStatusLabel1.Text = text;
+                    }
+                });
+            }
+            catch (Exception)
+            {
+                // The form can be gone while a background load is still reporting.
+                Volatile.Write(ref statusUpdateQueued, 0);
+            }
+        }
+
+        /// <summary>
+        /// Shows an error dialog on the UI thread. Loading reports errors from several threads,
+        /// and a MessageBox opened on a worker thread would put a second modal dialog on screen.
+        /// </summary>
+        private void ShowErrorDialog(string message)
         {
             if (InvokeRequired)
             {
-                var result = BeginInvoke(() => { toolStripStatusLabel1.Text = statusText; });
-                result.AsyncWaitHandle.WaitOne();
+                try
+                {
+                    Invoke(new Action<string>(ShowErrorDialog), message);
+                }
+                catch (Exception)
+                {
+                    // Form closed while a background load was still running.
+                }
+                return;
             }
-            else
-            {
-                toolStripStatusLabel1.Text = statusText;
-            }
+
+            MessageBox.Show(message);
         }
 
         public void ResetForm()

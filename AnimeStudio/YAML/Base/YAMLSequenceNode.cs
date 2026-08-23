@@ -13,6 +13,20 @@ namespace AnimeStudio
 			Style = style;
 		}
 
+		/// <summary>
+		/// For sequences whose length is known: the child list otherwise grows by doubling,
+		/// and animation YAML builds one sequence per curve with dozens to thousands of
+		/// keyframes. Growing those lists was the single largest item in an export profile.
+		/// </summary>
+		public YAMLSequenceNode(SequenceStyle style, int capacity)
+		{
+			Style = style;
+			if (capacity > 0)
+			{
+				m_children.Capacity = capacity;
+			}
+		}
+
 		public void Add(bool value)
 		{
 			YAMLScalarNode node = new YAMLScalarNode(value, Style.IsRaw());

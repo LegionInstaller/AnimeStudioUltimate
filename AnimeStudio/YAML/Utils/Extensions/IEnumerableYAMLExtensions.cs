@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Text;
 
@@ -50,7 +51,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (ushort value in _this)
 				{
 					node.Add(value);
@@ -72,7 +73,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (short value in _this)
 				{
 					node.Add(value);
@@ -94,7 +95,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (uint value in _this)
 				{
 					node.Add(value);
@@ -116,7 +117,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (int value in _this)
 				{
 					node.Add(value);
@@ -138,7 +139,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (ulong value in _this)
 				{
 					node.Add(value);
@@ -160,7 +161,7 @@ namespace AnimeStudio
 			}
 			else
 			{
-				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+				YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 				foreach (long value in _this)
 				{
 					node.Add(value);
@@ -171,7 +172,7 @@ namespace AnimeStudio
 
 		public static YAMLNode ExportYAML(this IEnumerable<float> _this)
 		{
-			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 			foreach (float value in _this)
 			{
 				node.Add(value);
@@ -181,7 +182,7 @@ namespace AnimeStudio
 
 		public static YAMLNode ExportYAML(this IEnumerable<double> _this)
 		{
-			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 			foreach (double value in _this)
 			{
 				node.Add(value);
@@ -191,7 +192,7 @@ namespace AnimeStudio
 
 		public static YAMLNode ExportYAML(this IEnumerable<string> _this)
 		{
-			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 			foreach (string value in _this)
 			{
 				node.Add(value);
@@ -201,7 +202,7 @@ namespace AnimeStudio
 
 		public static YAMLNode ExportYAML(this IEnumerable<IEnumerable<string>> _this)
 		{
-			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+			YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
 			foreach (IEnumerable<string> export in _this)
 			{
 				node.Add(export.ExportYAML());
@@ -212,7 +213,7 @@ namespace AnimeStudio
         public static YAMLNode ExportYAML<T>(this IEnumerable<T> _this, int[] version)
             where T : IYAMLExportable
         {
-            YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+            YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
             foreach (T export in _this)
             {
                 node.Add(export.ExportYAML(version));
@@ -223,7 +224,7 @@ namespace AnimeStudio
         public static YAMLNode ExportYAML<T>(this IEnumerable<IEnumerable<T>> _this, int[] version)
             where T : IYAMLExportable
         {
-            YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block);
+            YAMLSequenceNode node = new YAMLSequenceNode(SequenceStyle.Block, KnownCount(_this));
             foreach (IEnumerable<T> export in _this)
             {
                 node.Add(export.ExportYAML(version));
@@ -268,6 +269,16 @@ namespace AnimeStudio
                 node.Add(map);
             }
             return node;
+        }
+
+        /// <summary>
+        /// Element count when the source can report one without enumerating, otherwise 0.
+        /// This only sizes the child list up front, so a source that cannot report its
+        /// count simply falls back to the old growth behaviour.
+        /// </summary>
+        private static int KnownCount<T>(IEnumerable<T> source)
+        {
+            return source != null && source.TryGetNonEnumeratedCount(out var count) ? count : 0;
         }
     }
 }

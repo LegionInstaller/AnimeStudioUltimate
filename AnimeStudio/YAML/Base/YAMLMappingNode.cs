@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 
 namespace AnimeStudio
@@ -131,8 +132,42 @@ namespace AnimeStudio
 
 		public void Add(string key, YAMLNode value)
 		{
-			YAMLScalarNode keyNode = new YAMLScalarNode(key, true);
-			InsertEnd(keyNode, value);
+			InsertEnd(KeyNode(key), value);
+		}
+
+		/// <summary>
+		/// One node per distinct field name, shared by every mapping that uses it.
+		/// </summary>
+		/// <remarks>
+		/// Field names repeat across every object of a kind: animation YAML alone writes tens
+		/// of millions of "x", "y", "z", "time", "value", "inSlope". Each of those used to
+		/// become its own node. The node is immutable once built -- Style is get-only, the
+		/// internal constructor always picks Plain, and nothing outside YAMLScalarNode calls
+		/// SetValue -- so sharing one instance is safe, including across threads.
+		/// Bounded on both length and count, because a mapping key can also be arbitrary data
+		/// such as a container path.
+		/// </remarks>
+		private const int MaxCachedKeyLength = 32;
+		private const int MaxCachedKeys = 512;
+		private static readonly ConcurrentDictionary<string, YAMLScalarNode> s_keyNodes =
+			new ConcurrentDictionary<string, YAMLScalarNode>(StringComparer.Ordinal);
+
+		private static YAMLScalarNode KeyNode(string key)
+		{
+			if (key == null || key.Length > MaxCachedKeyLength)
+			{
+				return new YAMLScalarNode(key, true);
+			}
+			if (s_keyNodes.TryGetValue(key, out var cached))
+			{
+				return cached;
+			}
+			var node = new YAMLScalarNode(key, true);
+			if (s_keyNodes.Count < MaxCachedKeys)
+			{
+				s_keyNodes.TryAdd(key, node);
+			}
+			return node;
 		}
 
 		public void Add(YAMLNode key, bool value)

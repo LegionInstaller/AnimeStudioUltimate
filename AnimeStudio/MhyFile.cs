@@ -78,7 +78,12 @@ namespace AnimeStudio
             using var blocksStream = CreateBlocksStream(reader.FullPath);
             ReadBlocks(reader, blocksStream);
             ReadFiles(blocksStream, reader.FullPath);
-            m_Header.size = 8 + m_Header.compressedBlocksInfoSize + m_BlocksInfo.Sum(x => x.compressedSize);
+            {
+                long compressedTotal = 0;
+                foreach (var block in m_BlocksInfo)
+                    compressedTotal += block.compressedSize;
+                m_Header.size = 8 + m_Header.compressedBlocksInfoSize + compressedTotal;
+            }
             while (reader.PeekChar() == '\0')
             {
                 reader.Position++;
@@ -171,12 +176,16 @@ namespace AnimeStudio
         private Stream CreateBlocksStream(string path)
         {
             Stream blocksStream;
-            var uncompressedSizeSum = (int)m_BlocksInfo.Sum(x => x.uncompressedSize);
-            Logger.Verbose($"Total size of decompressed blocks: 0x{uncompressedSizeSum:X8}");
-            if (uncompressedSizeSum >= int.MaxValue)
+            long uncompressedSizeTotal = 0;
+            foreach (var block in m_BlocksInfo)
+                uncompressedSizeTotal += block.uncompressedSize;
+            Logger.Verbose($"Total size of decompressed blocks: 0x{uncompressedSizeTotal:X8}");
+            // The total has to be tested before it is narrowed: the previous check ran on the
+            // already-truncated int, so the temp-file fallback could never actually trigger.
+            if (uncompressedSizeTotal >= int.MaxValue)
                 blocksStream = new FileStream(path + ".temp", FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
             else
-                blocksStream = new MemoryStream(uncompressedSizeSum);
+                blocksStream = new MemoryStream((int)uncompressedSizeTotal);
             return blocksStream;
         }
 

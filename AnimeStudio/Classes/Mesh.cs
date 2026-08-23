@@ -686,7 +686,7 @@ namespace AnimeStudio
                 m_Vertices = reader.ReadSingleArray(m_VertexCount * 3); //Vector3
 
                 var skinNum = reader.ReadInt32();
-                m_Skin = new List<BoneWeights4>();
+                m_Skin = new List<BoneWeights4>(reader.Capacity(skinNum));
                 for (int s = 0; s < skinNum; s++)
                 {
                     m_Skin.Add(new BoneWeights4(reader));
@@ -726,7 +726,7 @@ namespace AnimeStudio
                 if (version[0] < 2018 || (version[0] == 2018 && version[1] < 2)) //2018.2 down
                 {
                     var skinNum = reader.ReadInt32();
-                    m_Skin = new List<BoneWeights4>();
+                    m_Skin = new List<BoneWeights4>(reader.Capacity(skinNum));
                     for (int s = 0; s < skinNum; s++)
                     {
                         m_Skin.Add(new BoneWeights4(reader));
@@ -1025,7 +1025,8 @@ namespace AnimeStudio
                                         //so nothing has written a weight for this vertex. Bind it fully to its first
                                         //bone. Channels are read in ascending order, so any real weights from
                                         //kShaderChannelBlendWeight above are already in place and left alone.
-                                        if (m_Skin[i].weight.Sum() <= 0f)
+                                        var weights = m_Skin[i].weight;
+                                        if (weights[0] + weights[1] + weights[2] + weights[3] <= 0f)
                                         {
                                             m_Skin[i].weight[0] = 1f;
                                         }
@@ -1340,7 +1341,7 @@ namespace AnimeStudio
 
         private void InitMSkin()
         {
-            m_Skin = new List<BoneWeights4>();
+            m_Skin = new List<BoneWeights4>(Math.Max(0, m_VertexCount));
             for (int i = 0; i < m_VertexCount; i++)
             {
                 m_Skin.Add(new BoneWeights4());

@@ -23,7 +23,7 @@ namespace AnimeStudio
         public GameObject(ObjectReader reader) : base(reader)
         {
             int m_Component_size = reader.ReadInt32();
-            m_Components = new List<PPtr<Component>>();
+            m_Components = new List<PPtr<Component>>(reader.Capacity(m_Component_size));
             for (int i = 0; i < m_Component_size; i++)
             {
                 if ((version[0] == 5 && version[1] < 5) || version[0] < 5) //5.5 down

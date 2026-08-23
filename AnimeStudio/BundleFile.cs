@@ -265,7 +265,9 @@ namespace AnimeStudio
         private Stream CreateBlocksStream(string path)
         {
             Stream blocksStream;
-            var uncompressedSizeSum = m_BlocksInfo.Sum(x => (long)x.uncompressedSize);
+            long uncompressedSizeSum = 0;
+            foreach (var block in m_BlocksInfo)
+                uncompressedSizeSum += block.uncompressedSize;
             Logger.Verbose($"Total size of decompressed blocks: {uncompressedSizeSum}");
 
             // Guard against corrupt/misaligned block info that would request multi-GB buffers.

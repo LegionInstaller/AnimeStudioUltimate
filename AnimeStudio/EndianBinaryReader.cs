@@ -24,7 +24,25 @@ namespace AnimeStudio
             set => BaseStream.Position = value;
         }
 
-        public long Length => BaseStream.Length;
+        // Length is read constantly (every ReadBytes, ReadAlignedString and every byte of
+        // ReadStringToNull consults Remaining). On a FileStream opened with FileShare.ReadWrite
+        // the runtime may not cache the file length, so each call becomes a
+        // GetFileInformationByHandleEx syscall -- 9.5% of load CPU on real ZZZ blocks. A stream
+        // we cannot write to cannot change length underneath us, so cache it for those only.
+        private long cachedLength = -1;
+
+        public long Length
+        {
+            get
+            {
+                if (cachedLength >= 0)
+                    return cachedLength;
+                var length = BaseStream.Length;
+                if (!BaseStream.CanWrite)
+                    cachedLength = length;
+                return length;
+            }
+        }
         public long Remaining => Length - Position;
 
         public override short ReadInt16()
@@ -243,6 +261,20 @@ namespace AnimeStudio
             return str;
         }
 
+
+        /// <summary>
+        /// Up-front capacity for a collection whose element count was just read from the file.
+        /// Growing such lists from zero was 9% of load CPU (repeated Array.Resize) and doubled
+        /// their transient memory. A corrupt count must not become a huge allocation, so it is
+        /// clamped to the bytes left in the stream -- no element can occupy less than one byte.
+        /// </summary>
+        public int Capacity(int count)
+        {
+            if (count <= 0)
+                return 0;
+            var remaining = Remaining;
+            return remaining < count ? (int)Math.Max(0, remaining) : count;
+        }
         internal T[] ReadArray<T>(Func<T> del, int length)
         {
             // Same reasoning as ReadBytes: every element needs at least one byte, so a length
@@ -251,24 +283,15 @@ namespace AnimeStudio
             {
                 throw new EndOfStreamException($"Invalid array length {length} at position 0x{Position:X} ({Position}), only {Remaining} bytes remaining (stream length {Length})");
             }
-            if (length < 0x1000)
+            // The length is validated above, so one exact-size array is safe for any size. The
+            // previous large-array path filled a List<T> and then called ToArray(), allocating
+            // the payload twice and copying it -- straight onto the LOH for big meshes.
+            var array = new T[length];
+            for (int i = 0; i < length; i++)
             {
-                var array = new T[length];
-                for (int i = 0; i < length; i++)
-                {
-                    array[i] = del();
-                }
-                return array;
+                array[i] = del();
             }
-            else
-            {
-                var list = new List<T>();
-                for (int i = 0; i < length; i++)
-                {
-                    list.Add(del());
-                }
-                return list.ToArray();
-            }
+            return array;
         }
 
         public bool[] ReadBooleanArray(int length = -1)

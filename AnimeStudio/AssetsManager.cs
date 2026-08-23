@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using static AnimeStudio.ImportHelper;
 
 namespace AnimeStudio
@@ -69,7 +70,6 @@ namespace AnimeStudio
 
         public AssetFilterData FilterData = new AssetFilterData { Items = new List<AssetFilterDataItem>() };
 
-        public Dictionary<string, List<long>> OffsetData = new();
 
         public void LoadFiles(params string[] files)
         {
@@ -131,6 +131,26 @@ namespace AnimeStudio
             }
         }
 
+        /// <summary>
+        /// Everything one top-level input file produced, before it is merged into the manager.
+        /// Loading writes here instead of straight into the shared collections, so independent
+        /// input files can be read concurrently while the merge stays in input order and the
+        /// result is identical to a serial run.
+        /// </summary>
+        private sealed class LoadBatch
+        {
+            public readonly List<SerializedFile> AssetsFiles = new List<SerializedFile>();
+            public readonly List<KeyValuePair<string, BinaryReader>> ResourceFiles = new List<KeyValuePair<string, BinaryReader>>();
+            /// <summary>External files discovered while resolving dependencies, loaded in the next wave.</summary>
+            public readonly List<string> Dependencies = new List<string>();
+            /// <summary>CAB names seen inside this input file, so duplicates are still skipped locally.</summary>
+            public readonly HashSet<string> LocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            /// <summary>Offsets requested by <see cref="FilterData"/> for the file being read.</summary>
+            public List<long> Offsets;
+            /// <summary>Names registered by an archive so dependency lookups skip them.</summary>
+            public readonly List<string> RegisteredNames = new List<string>();
+        }
+
         private void Load(string[] files)
         {
             foreach (var file in files)
@@ -141,17 +161,7 @@ namespace AnimeStudio
             }
 
             Progress.Reset();
-            //use a for loop because list size can change
-            for (var i = 0; i < importFiles.Count; i++)
-            {
-                LoadFile(importFiles[i]);
-                Progress.Report(i + 1, importFiles.Count);
-                if (tokenSource.IsCancellationRequested)
-                {
-                    Logger.Info("Loading files has been aborted !!");
-                    break;
-                }
-            }
+            LoadImportFiles();
 
             importFiles.Clear();
             importFilesHash.Clear();
@@ -166,27 +176,124 @@ namespace AnimeStudio
             }
         }
 
-        private void LoadFile(string fullName)
+        /// <summary>
+        /// Reads every queued input file. Files are independent -- each opens its own stream and
+        /// decompresses into its own buffers -- so they are read concurrently and merged
+        /// afterwards in input order. Dependency resolution can append new files while a wave
+        /// runs, so the queue is drained in waves until nothing new appears.
+        /// </summary>
+        private void LoadImportFiles()
+        {
+            // Map builders hook AfterBundleLoaded to flush and release each bundle as it lands;
+            // that only works if bundles arrive one at a time, so those runs stay serial.
+            var degree = AfterBundleLoaded != null ? 1 : Math.Max(1, MaxParallelism);
+
+            var processed = 0;
+            var start = 0;
+            while (start < importFiles.Count)
+            {
+                if (tokenSource.IsCancellationRequested)
+                {
+                    Logger.Info("Loading files has been aborted !!");
+                    return;
+                }
+
+                var count = importFiles.Count - start;
+                var wave = new string[count];
+                importFiles.CopyTo(start, wave, 0, count);
+                start = importFiles.Count;
+
+                var batches = new LoadBatch[count];
+                var total = importFiles.Count;
+
+                if (degree == 1)
+                {
+                    for (int i = 0; i < count && !tokenSource.IsCancellationRequested; i++)
+                    {
+                        batches[i] = new LoadBatch();
+                        LoadFile(wave[i], batches[i]);
+                        Progress.Report(++processed, total);
+                    }
+                }
+                else
+                {
+                    var options = new ParallelOptions { MaxDegreeOfParallelism = degree };
+                    Parallel.For(0, count, options, (i, state) =>
+                    {
+                        if (tokenSource.IsCancellationRequested)
+                        {
+                            state.Stop();
+                            return;
+                        }
+                        batches[i] = new LoadBatch();
+                        LoadFile(wave[i], batches[i]);
+                        Progress.Report(Interlocked.Increment(ref processed), total);
+                    });
+                }
+
+                // Merging in wave order keeps assetsFileList, the index cache and the
+                // first-wins duplicate rule exactly as the serial loop produced them.
+                foreach (var batch in batches)
+                {
+                    if (batch != null)
+                    {
+                        Merge(batch);
+                    }
+                }
+            }
+        }
+
+        private void Merge(LoadBatch batch)
+        {
+            foreach (var assetsFile in batch.AssetsFiles)
+            {
+                if (!assetsFileListHash.Add(assetsFile.fileName))
+                {
+                    // Another input file already contributed this CAB. First one wins, same as
+                    // the serial loop did; release the duplicate stream instead of leaking it.
+                    Logger.Info($"Skipping {assetsFile.originalPath} ({assetsFile.fileName})");
+                    assetsFile.reader.Dispose();
+                    continue;
+                }
+                assetsFileList.Add(assetsFile);
+                assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
+            }
+
+            foreach (var resource in batch.ResourceFiles)
+            {
+                if (!resourceFileReaders.TryAdd(resource.Key, resource.Value))
+                {
+                    resource.Value.Dispose();
+                }
+            }
+
+            foreach (var name in batch.RegisteredNames)
+            {
+                importFilesHash.Add(name);
+            }
+
+            foreach (var dependency in batch.Dependencies)
+            {
+                if (importFilesHash.Add(Path.GetFileName(dependency)))
+                {
+                    importFiles.Add(dependency);
+                }
+            }
+        }
+
+        private void LoadFile(string fullName, LoadBatch batch)
         {
             var reader = new FileReader(fullName);
             reader = reader.PreProcessing(Game);
-            LoadFile(reader);
+            LoadFile(reader, batch);
         }
 
-        private void LoadFile(FileReader reader)
+        private void LoadFile(FileReader reader, LoadBatch batch)
         {
-            OffsetData.Clear();
             if (FilterData.Items.Count > 0)
             {
                 var key = reader.FileName;
-
-                if (!OffsetData.TryGetValue(key, out var existingList))
-                    existingList = new List<long>();
-
                 var set = new HashSet<long>();
-                if (existingList != null)
-                    foreach (var off in existingList)
-                        set.Add(off);
 
                 foreach (var item in FilterData.Items)
                 {
@@ -205,112 +312,101 @@ namespace AnimeStudio
                             set.Add(off);
                 }
 
-                OffsetData[key] = set.ToList();
+                batch.Offsets = set.ToList();
             }
 
             switch (reader.FileType)
             {
                 case FileType.AssetsFile:
-                    LoadAssetsFile(reader);
+                    LoadAssetsFile(reader, batch);
                     break;
                 case FileType.BundleFile:
-                    LoadGameBlockFile(reader);
+                    LoadGameBlockFile(reader, batch);
                     break;
                 case FileType.WebFile:
-                    LoadWebFile(reader);
+                    LoadWebFile(reader, batch);
                     break;
                 case FileType.GZipFile:
-                    LoadFile(DecompressGZip(reader));
+                    LoadFile(DecompressGZip(reader), batch);
                     break;
                 case FileType.BrotliFile:
-                    LoadFile(DecompressBrotli(reader));
+                    LoadFile(DecompressBrotli(reader), batch);
                     break;
                 case FileType.ZipFile:
-                    LoadZipFile(reader);
+                    LoadZipFile(reader, batch);
                     break;
                 case FileType.BlockFile:
                 case FileType.BlkFile:
-                    LoadBlockFile(reader);
+                    LoadBlockFile(reader, batch);
                     break;
                 case FileType.MhyFile:
-                    LoadGameBlockFile(reader);
+                    LoadGameBlockFile(reader, batch);
                     break;
             }
         }
 
-        private void LoadAssetsFile(FileReader reader)
+        private void LoadAssetsFile(FileReader reader, LoadBatch batch)
         {
-            if (!assetsFileListHash.Contains(reader.FileName))
+            if (batch.LocalNames.Contains(reader.FileName))
             {
-                Logger.Info($"Loading {reader.FullPath}");
-                try
+                Logger.Info($"Skipping {reader.FullPath}");
+                reader.Dispose();
+                return;
+            }
+
+            Logger.Info($"Loading {reader.FullPath}");
+            try
+            {
+                var assetsFile = new SerializedFile(reader, this);
+                CheckStrippedVersion(assetsFile);
+                batch.AssetsFiles.Add(assetsFile);
+                batch.LocalNames.Add(assetsFile.fileName);
+
+                // External lookup does recursive Directory.GetFiles scans. Skip it when
+                // dependencies are not being resolved (map builds, single-file loads) --
+                // HSR-style CAB externals are almost never real on-disk files and the
+                // repeated full-directory scans dominate both CPU and temporary allocations.
+                if (ResolveDependencies)
                 {
-                    var assetsFile = new SerializedFile(reader, this);
-                    CheckStrippedVersion(assetsFile);
-                    assetsFileList.Add(assetsFile);
-                    // TryAdd: Load() resets assetsFileListHash but not the index cache (only
-                    // ClearLoadedAssets does), so a second load run without Clear() would throw
-                    // ArgumentException here and abort the rest of this block silently.
-                    assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
-                    assetsFileListHash.Add(assetsFile.fileName);
-
-                    // External lookup does recursive Directory.GetFiles scans. Skip it when
-                    // dependencies are not being resolved (map builds, single-file loads) —
-                    // HSR-style CAB externals are almost never real on-disk files and the
-                    // repeated full-directory scans dominate both CPU and temporary allocations.
-                    if (ResolveDependencies)
+                    foreach (var sharedFile in assetsFile.m_Externals)
                     {
-                        foreach (var sharedFile in assetsFile.m_Externals)
-                        {
-                            Logger.Verbose($"{assetsFile.fileName} needs external file {sharedFile.fileName}, attempting to look it up...");
-                            var sharedFileName = sharedFile.fileName;
+                        Logger.Verbose($"{assetsFile.fileName} needs external file {sharedFile.fileName}, attempting to look it up...");
+                        var sharedFileName = sharedFile.fileName;
+                        var directory = Path.GetDirectoryName(reader.FullPath);
+                        var sharedFilePath = Path.Combine(directory, sharedFileName);
 
-                            if (!importFilesHash.Contains(sharedFileName))
+                        if (!File.Exists(sharedFilePath))
+                        {
+                            var findFiles = Directory.GetFiles(directory, sharedFileName, SearchOption.AllDirectories);
+                            if (findFiles.Length > 0)
                             {
-                                var sharedFilePath = Path.Combine(Path.GetDirectoryName(reader.FullPath), sharedFileName);
-                                if (!noexistFiles.Contains(sharedFilePath))
-                                {
-                                    if (!File.Exists(sharedFilePath))
-                                    {
-                                        var findFiles = Directory.GetFiles(Path.GetDirectoryName(reader.FullPath), sharedFileName, SearchOption.AllDirectories);
-                                        if (findFiles.Length > 0)
-                                        {
-                                            Logger.Verbose($"Found {findFiles.Length} matching files, picking first file {findFiles[0]} !!");
-                                            sharedFilePath = findFiles[0];
-                                        }
-                                    }
-                                    if (File.Exists(sharedFilePath))
-                                    {
-                                        importFiles.Add(sharedFilePath);
-                                        importFilesHash.Add(sharedFileName);
-                                    }
-                                    else
-                                    {
-                                        Logger.Verbose("Nothing was found, caching into non existant files to avoid repeated searching !!");
-                                        noexistFiles.Add(sharedFilePath);
-                                    }
-                                }
+                                Logger.Verbose($"Found {findFiles.Length} matching files, picking first file {findFiles[0]} !!");
+                                sharedFilePath = findFiles[0];
                             }
+                        }
+                        if (File.Exists(sharedFilePath))
+                        {
+                            // Queued for the next wave; the merge drops names already imported.
+                            batch.Dependencies.Add(sharedFilePath);
+                        }
+                        else
+                        {
+                            Logger.Verbose("Nothing was found, dependency does not exist on disk");
                         }
                     }
                 }
-                catch (Exception e)
-                {
-                    Logger.Error($"Error while reading assets file {reader.FullPath}", e);
-                    reader.Dispose();
-                }
             }
-            else
+            catch (Exception e)
             {
-                Logger.Info($"Skipping {reader.FullPath}");
+                Logger.Error($"Error while reading assets file {reader.FullPath}", e);
                 reader.Dispose();
             }
         }
 
-        private void LoadAssetsFromMemory(FileReader reader, string originalPath, string unityVersion = null, long originalOffset = 0)
+        private void LoadAssetsFromMemory(FileReader reader, LoadBatch batch, string originalPath, string unityVersion = null, long originalOffset = 0)
         {
             Logger.Verbose($"Loading asset file {reader.FileName} with version {unityVersion} from {originalPath} at offset 0x{originalOffset:X8}");
-            if (!assetsFileListHash.Contains(reader.FileName))
+            if (!batch.LocalNames.Contains(reader.FileName))
             {
                 try
                 {
@@ -322,32 +418,27 @@ namespace AnimeStudio
                         assetsFile.SetVersion(unityVersion);
                     }
                     CheckStrippedVersion(assetsFile);
-                    assetsFileList.Add(assetsFile);
-                    // TryAdd, see LoadAssetsFile: a duplicate CAB name (second load run without
-                    // Clear()) must not throw and make this file look like a read failure.
-                    assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
-                    assetsFileListHash.Add(assetsFile.fileName);
+                    batch.AssetsFiles.Add(assetsFile);
+                    batch.LocalNames.Add(assetsFile.fileName);
                 }
                 catch (Exception e)
                 {
                     Logger.Error($"Error while reading assets file {reader.FullPath} from {Path.GetFileName(originalPath)}", e);
-                    // Only retain the reader if we actually cache it; otherwise free its stream.
-                    if (!resourceFileReaders.TryAdd(reader.FileName, reader))
-                    {
-                        reader.Dispose();
-                    }
+                    // A file that failed to parse as a serialized file may still be a usable
+                    // resource stream, so hand it to the merge instead of dropping it there.
+                    batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(reader.FileName, reader));
                 }
             }
             else
             {
                 Logger.Info($"Skipping {originalPath} ({reader.FileName})");
-                // Duplicate CAB name inside the same block (or already loaded) — the stream was
-                // freshly allocated by BundleFile.ReadFiles and would otherwise leak until GC.
+                // Duplicate CAB name inside the same block -- the stream was freshly allocated
+                // by BundleFile.ReadFiles and would otherwise leak until GC.
                 reader.Dispose();
             }
         }
 
-        private void LoadWebFile(FileReader reader)
+        private void LoadWebFile(FileReader reader, LoadBatch batch)
         {
             Logger.Info("Loading " + reader.FullPath);
             try
@@ -360,20 +451,17 @@ namespace AnimeStudio
                     switch (subReader.FileType)
                     {
                         case FileType.AssetsFile:
-                            LoadAssetsFromMemory(subReader, reader.FullPath);
+                            LoadAssetsFromMemory(subReader, batch, reader.FullPath);
                             break;
                         case FileType.BundleFile:
-                            LoadGameBlockFile(subReader, reader.FullPath);
+                            LoadGameBlockFile(subReader, batch, reader.FullPath);
                             break;
                         case FileType.WebFile:
-                            LoadWebFile(subReader);
+                            LoadWebFile(subReader, batch);
                             break;
                         case FileType.ResourceFile:
                             Logger.Verbose("Caching resource stream");
-                            if (!resourceFileReaders.TryAdd(file.fileName, subReader))
-                            {
-                                subReader.Dispose();
-                            }
+                            batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(file.fileName, subReader));
                             break;
                     }
                 }
@@ -388,7 +476,7 @@ namespace AnimeStudio
             }
         }
 
-        private void LoadZipFile(FileReader reader)
+        private void LoadZipFile(FileReader reader, LoadBatch batch)
         {
             Logger.Info("Loading " + reader.FileName);
             try
@@ -406,12 +494,12 @@ namespace AnimeStudio
                             if (!splitFiles.Contains(basePath))
                             {
                                 splitFiles.Add(basePath);
-                                importFilesHash.Add(baseName);
+                                batch.RegisteredNames.Add(baseName);
                             }
                         }
                         else
                         {
-                            importFilesHash.Add(entry.Name);
+                            batch.RegisteredNames.Add(entry.Name);
                         }
                     }
 
@@ -436,7 +524,7 @@ namespace AnimeStudio
                             splitStream.Seek(0, SeekOrigin.Begin);
                             FileReader entryReader = new FileReader(basePath, splitStream);
                             entryReader = entryReader.PreProcessing(Game);
-                            LoadFile(entryReader);
+                            LoadFile(entryReader, batch);
                         }
                         catch (Exception e)
                         {
@@ -461,15 +549,12 @@ namespace AnimeStudio
 
                             FileReader entryReader = new FileReader(dummyPath, streamReader);
                             entryReader = entryReader.PreProcessing(Game);
-                            LoadFile(entryReader);
+                            LoadFile(entryReader, batch);
                             if (entryReader.FileType == FileType.ResourceFile)
                             {
                                 entryReader.Position = 0;
                                 Logger.Verbose("Caching resource file");
-                                if (!resourceFileReaders.TryAdd(entry.Name, entryReader))
-                                {
-                                    entryReader.Dispose();
-                                }
+                                batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(entry.Name, entryReader));
                             }
                         }
                         catch (Exception e)
@@ -488,7 +573,7 @@ namespace AnimeStudio
                 reader.Dispose();
             }
         }
-        private void LoadBlockFile(FileReader reader)
+        private void LoadBlockFile(FileReader reader, LoadBatch batch)
         {
             Logger.Info("Loading " + reader.FullPath);
             try
@@ -510,7 +595,7 @@ namespace AnimeStudio
                 {
                     var total = stream.Length;
 
-                    OffsetData.TryGetValue(reader.FileName, out var manualOffsets);
+                    var manualOffsets = batch.Offsets;
                     bool isManualOffsets = (manualOffsets != null && manualOffsets.Count > 0) && Game.Type.IsArknightsEndfieldGroup();
                     IEnumerable<long> offsetsEnumerable = isManualOffsets
                         ? manualOffsets
@@ -527,7 +612,7 @@ namespace AnimeStudio
                         var subReader = new FileReader(dummyPath, stream, true);
                         if (isManualOffsets)
                             subReader.Position = offset;
-                        LoadGameBlockFile(subReader, reader.FullPath, offset, false);
+                        LoadGameBlockFile(subReader, batch, reader.FullPath, offset, false);
 
                         if (manualTotal.HasValue)
                             Progress.Report(idx + 1, manualTotal.Value);
@@ -547,7 +632,7 @@ namespace AnimeStudio
                 reader.Dispose();
             }
         }
-        private void LoadGameBlockFile(FileReader reader, string originalPath = null, long originalOffset = 0, bool log = true)
+        private void LoadGameBlockFile(FileReader reader, LoadBatch batch, string originalPath = null, long originalOffset = 0, bool log = true)
         {
             if (log)
             {
@@ -580,24 +665,25 @@ namespace AnimeStudio
                 if (file == null)
                     throw new Exception("Unsupported game block file type");
 
-                Logger.Verbose($"file total size: {file.m_Header.size:X8}");
+                // Resolve the dynamic member into a typed local first: a dynamic operand turns
+                // the whole interpolation into a dynamic call, which cannot bind the ref struct
+                // handler that keeps disabled verbose logging allocation-free.
+                long totalSize = file.m_Header.size;
+                Logger.Verbose($"file total size: {totalSize:X8}");
                 foreach (var innerFile in file.fileList)
                 {
                     var dummyPath = Path.Combine(Path.GetDirectoryName(reader.FullPath), innerFile.fileName);
                     var cabReader = new FileReader(dummyPath, innerFile.stream);
                     if (cabReader.FileType == FileType.AssetsFile)
                     {
-                        LoadAssetsFromMemory(cabReader, originalPath ?? reader.FullPath, file.m_Header.unityRevision, originalOffset);
+                        LoadAssetsFromMemory(cabReader, batch, originalPath ?? reader.FullPath, file.m_Header.unityRevision, originalOffset);
                     }
                     else
                     {
                         Logger.Verbose("Caching resource stream");
-                        // Dispose immediately on name collision — TryAdd would otherwise drop the
-                        // new stream with no owner while the previous one stays cached.
-                        if (!resourceFileReaders.TryAdd(innerFile.fileName, cabReader))
-                        {
-                            cabReader.Dispose();
-                        }
+                        // The merge disposes the loser on a name collision, so no stream is
+                        // left without an owner.
+                        batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(innerFile.fileName, cabReader));
                     }
                 }
             }
@@ -685,83 +771,119 @@ namespace AnimeStudio
             Logger.Verbose("Cleaning up...");
 
             ClearLoadedAssets();
-            OffsetData.Clear();
+
             assetsFileListHash.Clear();
 
             tokenSource.Dispose();
             tokenSource = new CancellationTokenSource();
         }
 
+        /// <summary>
+        /// Degree of parallelism for the independent-per-file stages of loading.
+        /// One thread per core; a value of 1 restores the fully serial behaviour.
+        /// </summary>
+        public static int MaxParallelism { get; set; } = Environment.ProcessorCount;
+
         private void ReadAssets()
         {
             Logger.Info("Read assets...");
 
-            var progressCount = assetsFileList.Sum(x => x.m_Objects.Count);
-            int i = 0;
-            Progress.Reset();
+            var progressCount = 0;
             foreach (var assetsFile in assetsFileList)
+                progressCount += assetsFile.m_Objects.Count;
+
+            var done = 0;
+            Progress.Reset();
+
+            // Every serialized file owns its reader and its own object collections, and object
+            // constructors only read from the file they belong to -- no cross-file lookups happen
+            // until ProcessAssets. So files can be parsed concurrently while objects inside a file
+            // stay strictly in order, which keeps the result identical to the serial version.
+            var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, MaxParallelism) };
+            Parallel.ForEach(assetsFileList, options, (assetsFile, state) =>
             {
+                if (tokenSource.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return;
+                }
+
                 foreach (var objectInfo in assetsFile.m_Objects)
                 {
                     if (tokenSource.IsCancellationRequested)
                     {
-                        Logger.Info("Reading assets has been cancelled !!");
+                        state.Stop();
                         return;
                     }
-                    var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo, Game);
-                    try
-                    {
-                        Object obj = objectReader.type switch
-                        {
-                            ClassIDType.Animation when ClassIDType.Animation.CanParse() => new Animation(objectReader),
-                            ClassIDType.AnimationClip when ClassIDType.AnimationClip.CanParse() => new AnimationClip(objectReader),
-                            ClassIDType.Animator when ClassIDType.Animator.CanParse() => new Animator(objectReader),
-                            ClassIDType.AnimatorController when ClassIDType.AnimatorController.CanParse() => new AnimatorController(objectReader),
-                            ClassIDType.AnimatorOverrideController when ClassIDType.AnimatorOverrideController.CanParse() => new AnimatorOverrideController(objectReader),
-                            ClassIDType.AssetBundle when ClassIDType.AssetBundle.CanParse() => new AssetBundle(objectReader),
-                            ClassIDType.AudioClip when ClassIDType.AudioClip.CanParse() => new AudioClip(objectReader),
-                            ClassIDType.Avatar when ClassIDType.Avatar.CanParse() => new Avatar(objectReader),
-                            ClassIDType.Font when ClassIDType.Font.CanParse() => new Font(objectReader),
-                            ClassIDType.GameObject when ClassIDType.GameObject.CanParse() => new GameObject(objectReader),
-                            ClassIDType.IndexObject when ClassIDType.IndexObject.CanParse() => new IndexObject(objectReader),
-                            ClassIDType.Material when ClassIDType.Material.CanParse() => new Material(objectReader),
-                            ClassIDType.Mesh when ClassIDType.Mesh.CanParse() => new Mesh(objectReader),
-                            ClassIDType.MeshFilter when ClassIDType.MeshFilter.CanParse() => new MeshFilter(objectReader),
-                            ClassIDType.MeshRenderer when ClassIDType.MeshRenderer.CanParse() => new MeshRenderer(objectReader),
-                            ClassIDType.MiHoYoBinData when ClassIDType.MiHoYoBinData.CanParse() => new MiHoYoBinData(objectReader),
-                            ClassIDType.MonoBehaviour when ClassIDType.MonoBehaviour.CanParse() => new MonoBehaviour(objectReader),
-                            ClassIDType.MonoScript when ClassIDType.MonoScript.CanParse() => new MonoScript(objectReader),
-                            ClassIDType.MovieTexture when ClassIDType.MovieTexture.CanParse() => new MovieTexture(objectReader),
-                            ClassIDType.PlayerSettings when ClassIDType.PlayerSettings.CanParse() => new PlayerSettings(objectReader),
-                            ClassIDType.RectTransform when ClassIDType.RectTransform.CanParse() => new RectTransform(objectReader),
-                            ClassIDType.Shader when ClassIDType.Shader.CanParse() => new Shader(objectReader),
-                            ClassIDType.SkinnedMeshRenderer when ClassIDType.SkinnedMeshRenderer.CanParse() => new SkinnedMeshRenderer(objectReader),
-                            ClassIDType.Sprite when ClassIDType.Sprite.CanParse() => new Sprite(objectReader),
-                            ClassIDType.SpriteAtlas when ClassIDType.SpriteAtlas.CanParse() => new SpriteAtlas(objectReader),
-                            ClassIDType.TextAsset when ClassIDType.TextAsset.CanParse() => new TextAsset(objectReader),
-                            ClassIDType.Texture2D when ClassIDType.Texture2D.CanParse() => new Texture2D(objectReader),
-                            ClassIDType.Transform when ClassIDType.Transform.CanParse() => new Transform(objectReader),
-                            ClassIDType.VideoClip when ClassIDType.VideoClip.CanParse() => new VideoClip(objectReader),
-                            ClassIDType.ResourceManager when ClassIDType.ResourceManager.CanParse() => new ResourceManager(objectReader),
-                            ClassIDType.NapAssetBundleIndexAsset when ClassIDType.NapAssetBundleIndexAsset.CanParse() => new NapAssetBundleIndexAsset(objectReader),
-                            _ => new Object(objectReader),
-                        };
-                        assetsFile.AddObject(obj);
-                    }
-                    catch (Exception e)
-                    {
-                        var sb = new StringBuilder();
-                        sb.AppendLine("Unable to load object")
-                            .AppendLine($"Assets {assetsFile.fileName}")
-                            .AppendLine($"Path {assetsFile.originalPath}")
-                            .AppendLine($"Type {objectReader.type}")
-                            .AppendLine($"PathID {objectInfo.m_PathID}")
-                            .Append(e);
-                        Logger.Error(sb.ToString());
-                    }
 
-                    Progress.Report(++i, progressCount);
+                    ReadObject(assetsFile, objectInfo);
+
+                    var current = Interlocked.Increment(ref done);
+                    if ((current & 0x3FF) == 0)
+                        Progress.Report(current, progressCount);
                 }
+            });
+
+            if (tokenSource.IsCancellationRequested)
+            {
+                Logger.Info("Reading assets has been cancelled !!");
+                return;
+            }
+            Progress.Report(progressCount, progressCount);
+        }
+
+        private void ReadObject(SerializedFile assetsFile, ObjectInfo objectInfo)
+        {
+            var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo, Game);
+            try
+            {
+                Object obj = objectReader.type switch
+                {
+                    ClassIDType.Animation when ClassIDType.Animation.CanParse() => new Animation(objectReader),
+                    ClassIDType.AnimationClip when ClassIDType.AnimationClip.CanParse() => new AnimationClip(objectReader),
+                    ClassIDType.Animator when ClassIDType.Animator.CanParse() => new Animator(objectReader),
+                    ClassIDType.AnimatorController when ClassIDType.AnimatorController.CanParse() => new AnimatorController(objectReader),
+                    ClassIDType.AnimatorOverrideController when ClassIDType.AnimatorOverrideController.CanParse() => new AnimatorOverrideController(objectReader),
+                    ClassIDType.AssetBundle when ClassIDType.AssetBundle.CanParse() => new AssetBundle(objectReader),
+                    ClassIDType.AudioClip when ClassIDType.AudioClip.CanParse() => new AudioClip(objectReader),
+                    ClassIDType.Avatar when ClassIDType.Avatar.CanParse() => new Avatar(objectReader),
+                    ClassIDType.Font when ClassIDType.Font.CanParse() => new Font(objectReader),
+                    ClassIDType.GameObject when ClassIDType.GameObject.CanParse() => new GameObject(objectReader),
+                    ClassIDType.IndexObject when ClassIDType.IndexObject.CanParse() => new IndexObject(objectReader),
+                    ClassIDType.Material when ClassIDType.Material.CanParse() => new Material(objectReader),
+                    ClassIDType.Mesh when ClassIDType.Mesh.CanParse() => new Mesh(objectReader),
+                    ClassIDType.MeshFilter when ClassIDType.MeshFilter.CanParse() => new MeshFilter(objectReader),
+                    ClassIDType.MeshRenderer when ClassIDType.MeshRenderer.CanParse() => new MeshRenderer(objectReader),
+                    ClassIDType.MiHoYoBinData when ClassIDType.MiHoYoBinData.CanParse() => new MiHoYoBinData(objectReader),
+                    ClassIDType.MonoBehaviour when ClassIDType.MonoBehaviour.CanParse() => new MonoBehaviour(objectReader),
+                    ClassIDType.MonoScript when ClassIDType.MonoScript.CanParse() => new MonoScript(objectReader),
+                    ClassIDType.MovieTexture when ClassIDType.MovieTexture.CanParse() => new MovieTexture(objectReader),
+                    ClassIDType.PlayerSettings when ClassIDType.PlayerSettings.CanParse() => new PlayerSettings(objectReader),
+                    ClassIDType.RectTransform when ClassIDType.RectTransform.CanParse() => new RectTransform(objectReader),
+                    ClassIDType.Shader when ClassIDType.Shader.CanParse() => new Shader(objectReader),
+                    ClassIDType.SkinnedMeshRenderer when ClassIDType.SkinnedMeshRenderer.CanParse() => new SkinnedMeshRenderer(objectReader),
+                    ClassIDType.Sprite when ClassIDType.Sprite.CanParse() => new Sprite(objectReader),
+                    ClassIDType.SpriteAtlas when ClassIDType.SpriteAtlas.CanParse() => new SpriteAtlas(objectReader),
+                    ClassIDType.TextAsset when ClassIDType.TextAsset.CanParse() => new TextAsset(objectReader),
+                    ClassIDType.Texture2D when ClassIDType.Texture2D.CanParse() => new Texture2D(objectReader),
+                    ClassIDType.Transform when ClassIDType.Transform.CanParse() => new Transform(objectReader),
+                    ClassIDType.VideoClip when ClassIDType.VideoClip.CanParse() => new VideoClip(objectReader),
+                    ClassIDType.ResourceManager when ClassIDType.ResourceManager.CanParse() => new ResourceManager(objectReader),
+                    ClassIDType.NapAssetBundleIndexAsset when ClassIDType.NapAssetBundleIndexAsset.CanParse() => new NapAssetBundleIndexAsset(objectReader),
+                    _ => new Object(objectReader),
+                };
+                assetsFile.AddObject(obj);
+            }
+            catch (Exception e)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("Unable to load object")
+                    .AppendLine($"Assets {assetsFile.fileName}")
+                    .AppendLine($"Path {assetsFile.originalPath}")
+                    .AppendLine($"Type {objectReader.type}")
+                    .AppendLine($"PathID {objectInfo.m_PathID}")
+                    .Append(e);
+                Logger.Error(sb.ToString());
             }
         }
 

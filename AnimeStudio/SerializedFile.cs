@@ -106,7 +106,7 @@ namespace AnimeStudio
 
             // Read Types
             int typeCount = reader.ReadInt32();
-            m_Types = new List<SerializedType>();
+            m_Types = new List<SerializedType>(reader.Capacity(typeCount));
             Logger.Verbose($"Found {typeCount} serialized types");
             for (int i = 0; i < typeCount; i++)
             {
@@ -120,9 +120,9 @@ namespace AnimeStudio
 
             // Read Objects
             int objectCount = reader.ReadInt32();
-            m_Objects = new List<ObjectInfo>();
-            Objects = new List<Object>();
-            ObjectsDic = new Dictionary<long, Object>();
+            m_Objects = new List<ObjectInfo>(reader.Capacity(objectCount));
+            Objects = new List<Object>(reader.Capacity(objectCount));
+            ObjectsDic = new Dictionary<long, Object>(reader.Capacity(objectCount));
             Logger.Verbose($"Found {objectCount} objects");
             for (int i = 0; i < objectCount; i++)
             {
@@ -182,7 +182,7 @@ namespace AnimeStudio
             {
                 int scriptCount = reader.ReadInt32();
                 Logger.Verbose($"Found {scriptCount} scripts");
-                m_ScriptTypes = new List<LocalSerializedObjectIdentifier>();
+                m_ScriptTypes = new List<LocalSerializedObjectIdentifier>(reader.Capacity(scriptCount));
                 for (int i = 0; i < scriptCount; i++)
                 {
                     var m_ScriptType = new LocalSerializedObjectIdentifier();
@@ -202,7 +202,7 @@ namespace AnimeStudio
             }
 
             int externalsCount = reader.ReadInt32();
-            m_Externals = new List<FileIdentifier>();
+            m_Externals = new List<FileIdentifier>(reader.Capacity(externalsCount));
             Logger.Verbose($"Found {externalsCount} externals");
             for (int i = 0; i < externalsCount; i++)
             {

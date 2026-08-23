@@ -15,12 +15,30 @@ namespace AnimeStudio
         public override bool CanSeek => _baseStream.CanSeek;
         public override bool CanWrite => false;
 
+        // Same reason as EndianBinaryReader.Length: the underlying .blk FileStream is opened
+        // with FileShare.ReadWrite, so every Length read is a syscall. Offset, Seek and Length
+        // all consult it, which means one per seek and one per bounds check.
+        private long cachedBaseLength = -1;
+
+        private long BaseLength
+        {
+            get
+            {
+                if (cachedBaseLength >= 0)
+                    return cachedBaseLength;
+                var length = _baseStream.Length;
+                if (!_baseStream.CanWrite)
+                    cachedBaseLength = length;
+                return length;
+            }
+        }
+
         public long Offset
         {
             get => _offset;
             set
             {
-                if (value < 0 || value > _baseStream.Length)
+                if (value < 0 || value > BaseLength)
                 {
                     throw new IOException($"{nameof(Offset)} is out of stream bound");
                 }
@@ -31,7 +49,7 @@ namespace AnimeStudio
         public long AbsolutePosition => _baseStream.Position;
         public long Remaining => Length - Position;
 
-        public override long Length => _baseStream.Length - _offset;
+        public override long Length => BaseLength - _offset;
         public override long Position
         {
             get => _baseStream.Position - _offset;
@@ -47,7 +65,7 @@ namespace AnimeStudio
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            if (offset > _baseStream.Length)
+            if (offset > BaseLength)
             {
                 throw new IOException("Unable to seek beyond stream bound");
             }
@@ -56,7 +74,7 @@ namespace AnimeStudio
             {
                 SeekOrigin.Begin => offset + _offset,
                 SeekOrigin.Current => offset + Position,
-                SeekOrigin.End => offset + _baseStream.Length,
+                SeekOrigin.End => offset + BaseLength,
                 _ => throw new NotSupportedException()
             };
 

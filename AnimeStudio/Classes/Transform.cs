@@ -20,7 +20,7 @@ namespace AnimeStudio
             m_LocalScale = reader.ReadVector3();
 
             int m_ChildrenCount = reader.ReadInt32();
-            m_Children = new List<PPtr<Transform>>();
+            m_Children = new List<PPtr<Transform>>(reader.Capacity(m_ChildrenCount));
             for (int i = 0; i < m_ChildrenCount; i++)
             {
                 m_Children.Add(new PPtr<Transform>(reader));

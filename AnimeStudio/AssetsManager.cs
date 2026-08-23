@@ -221,19 +221,24 @@ namespace AnimeStudio
                 else
                 {
                     var options = new ParallelOptions { MaxDegreeOfParallelism = degree };
-                    Parallel.For(0, count, options, (i, state) =>
+                    // One input file at a time for the same reason as ReadAssets: block files
+                    // range from under a kilobyte to a hundred megabytes.
+                    Parallel.ForEach(Partitioner.Create(0, count, 1), options, (range, state) =>
                     {
-                        if (tokenSource.IsCancellationRequested)
+                        for (int i = range.Item1; i < range.Item2; i++)
                         {
-                            state.Stop();
-                            return;
+                            if (tokenSource.IsCancellationRequested)
+                            {
+                                state.Stop();
+                                return;
+                            }
+                            batches[i] = new LoadBatch();
+                            LoadFile(wave[i], batches[i]);
+                            Progress.Report(Interlocked.Increment(ref processed), total);
                         }
-                        batches[i] = new LoadBatch();
-                        LoadFile(wave[i], batches[i]);
-                        Progress.Report(Interlocked.Increment(ref processed), total);
                     });
-                }
 
+                }
                 // Merging in wave order keeps assetsFileList, the index cache and the
                 // first-wins duplicate rule exactly as the serial loop produced them.
                 foreach (var batch in batches)
@@ -801,7 +806,12 @@ namespace AnimeStudio
             // until ProcessAssets. So files can be parsed concurrently while objects inside a file
             // stay strictly in order, which keeps the result identical to the serial version.
             var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, MaxParallelism) };
-            Parallel.ForEach(assetsFileList, options, (assetsFile, state) =>
+            // NoBuffering hands out one file at a time. Serialized files differ enormously in
+            // size, and the default partitioner grows its chunks as it goes, so a late chunk
+            // full of heavy files left one thread finishing alone -- that turned this phase
+            // from 1.1 s into 3.6 s on roughly one run in six.
+            var partitioner = Partitioner.Create(assetsFileList, EnumerablePartitionerOptions.NoBuffering);
+            Parallel.ForEach(partitioner, options, (assetsFile, state) =>
             {
                 if (tokenSource.IsCancellationRequested)
                 {

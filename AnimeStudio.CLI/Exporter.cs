@@ -101,20 +101,18 @@ namespace AnimeStudio.CLI
             return true;
         }
 
+        // Built once. These were compiled anew for every MonoBehaviour -- 5800 of them in a
+        // single run of six blocks -- and are only ever read when scrapeMonos is on, which it
+        // is not by default. Regex instances are thread-safe for matching.
+        private static readonly Regex folderRegex = new Regex(@"(?:Assets|UI|IconRole|Data|Scenes|OriginalResRepos|Comic|Weapon)(?:/[^\s"",]+)*", RegexOptions.IgnoreCase);
+        private static readonly Regex fileRegex = new Regex(@"(?:Assets|UI|IconRole|Data|Scenes|OriginalResRepos|Comic|Weapon)/[^\s"",]+?\.(?:.*)", RegexOptions.IgnoreCase);
+        private static readonly Regex voRegex = new Regex(@"(?:VO|Breath|Tips)_[^""\s;]+", RegexOptions.IgnoreCase);
+        private static readonly Regex eventRegex = new Regex(@"(?:Ev|Play|Stop|StateGroup|State|VO|SFX)_[a-zA-Z0-9/_-\{\}]{2,}", RegexOptions.IgnoreCase);
+
         public static bool ExportMonoBehaviour(AssetItem item, string exportPath)
         {
             var option = new Options();
             var m_MonoBehaviour = (MonoBehaviour)item.Asset;
-
-            string folderPattern = $@"(?:Assets|UI|IconRole|Data|Scenes|OriginalResRepos|Comic|Weapon)(?:/[^\s"",]+)*";
-            string filePattern = $@"(?:Assets|UI|IconRole|Data|Scenes|OriginalResRepos|Comic|Weapon)/[^\s"",]+?\.(?:.*)";
-            string voPattern = @"(?:VO|Breath|Tips)_[^""\s;]+";
-            string eventPattern = @"(?:Ev|Play|Stop|StateGroup|State|VO|SFX)_[a-zA-Z0-9/_-\{\}]{2,}";
-
-            var folderRegex = new Regex(folderPattern, RegexOptions.IgnoreCase);
-            var fileRegex = new Regex(filePattern, RegexOptions.IgnoreCase);
-            var voRegex = new Regex(voPattern, RegexOptions.IgnoreCase);
-            var eventRegex = new Regex(eventPattern, RegexOptions.IgnoreCase);
 
             if (Properties.Settings.Default.scrapeMonos)
             {

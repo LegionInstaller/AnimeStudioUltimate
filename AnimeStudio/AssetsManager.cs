@@ -581,7 +581,9 @@ namespace AnimeStudio
             Logger.Info("Loading " + reader.FullPath);
             try
             {
-                dynamic stream;
+                // XORStream derives from OffsetStream, so both branches share a static type
+                // and neither GetOffsets nor Length needs dynamic dispatch.
+                OffsetStream stream;
 
                 switch (reader.FileType)
                 {
@@ -643,7 +645,7 @@ namespace AnimeStudio
             }
             try
             {
-                dynamic file = null;
+                IBundleContainer file = null;
 
                 switch (reader.FileType)
                 {
@@ -668,18 +670,14 @@ namespace AnimeStudio
                 if (file == null)
                     throw new Exception("Unsupported game block file type");
 
-                // Resolve the dynamic member into a typed local first: a dynamic operand turns
-                // the whole interpolation into a dynamic call, which cannot bind the ref struct
-                // handler that keeps disabled verbose logging allocation-free.
-                long totalSize = file.m_Header.size;
-                Logger.Verbose($"file total size: {totalSize:X8}");
-                foreach (var innerFile in file.fileList)
+                Logger.Verbose($"file total size: {file.Header.size:X8}");
+                foreach (var innerFile in file.Files)
                 {
                     var dummyPath = Path.Combine(Path.GetDirectoryName(reader.FullPath), innerFile.fileName);
                     var cabReader = new FileReader(dummyPath, innerFile.stream);
                     if (cabReader.FileType == FileType.AssetsFile)
                     {
-                        LoadAssetsFromMemory(cabReader, batch, originalPath ?? reader.FullPath, file.m_Header.unityRevision, originalOffset);
+                        LoadAssetsFromMemory(cabReader, batch, originalPath ?? reader.FullPath, file.Header.unityRevision, originalOffset);
                     }
                     else
                     {

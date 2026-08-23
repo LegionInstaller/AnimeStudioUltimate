@@ -9,7 +9,7 @@ using static AnimeStudio.CryptoHelper;
 
 namespace AnimeStudio
 {
-    public class MhyFile
+    public class MhyFile : IBundleContainer
     {
         private string signature;
         private List<BundleFile.StorageBlock> m_BlocksInfo;
@@ -17,6 +17,9 @@ namespace AnimeStudio
 
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
+
+        BundleFile.Header IBundleContainer.Header => m_Header;
+        List<StreamFile> IBundleContainer.Files => fileList;
         public Mhy mhy;
 
         public long Offset;

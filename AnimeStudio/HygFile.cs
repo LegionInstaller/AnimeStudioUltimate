@@ -8,13 +8,16 @@ using System.Threading.Tasks;
 
 namespace AnimeStudio
 {
-    public class HygFile
+    public class HygFile : IBundleContainer
     {
         private List<BundleFile.StorageBlock> m_BlocksInfo;
         private List<BundleFile.Node> m_DirectoryInfo;
 
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
+
+        BundleFile.Header IBundleContainer.Header => m_Header;
+        List<StreamFile> IBundleContainer.Files => fileList;
         public long Offset;
 
         public HygFile(FileReader reader, string path) {

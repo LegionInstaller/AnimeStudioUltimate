@@ -42,7 +42,9 @@ namespace AnimeStudio
 
         public YAMLNode ExportYAML(int[] version)
         {
-            var node = new YAMLMappingNode();
+            // serializedVersion, time, value, inSlope, outSlope and, from 2018 on,
+            // weightedMode, inWeight and outWeight.
+            var node = new YAMLMappingNode(version[0] >= 2018 ? 8 : 5);
             node.AddSerializedVersion(ToSerializedVersion(version));
             node.Add(nameof(time), time);
             node.Add(nameof(value), value.ExportYAML(version));
@@ -1960,39 +1962,74 @@ namespace AnimeStudio
             return node;
         }
 
+        /// <summary>
+        /// Curve index to binding, built once per clip.
+        /// </summary>
+        /// <remarks>
+        /// A binding covers one to four consecutive curves, so the mapping is a running sum over
+        /// the binding list. Recomputing that sum from the start for every lookup made export
+        /// quadratic in the number of curves -- it was the single hottest managed method in an
+        /// animation export after YAML formatting itself.
+        /// </remarks>
+        private GenericBinding[] curveIndexToBinding;
+
         public GenericBinding FindBinding(int index)
         {
-            int curves = 0;
-            foreach (var b in genericBindings)
+            if (index < 0)
             {
-                if (b.typeID == ClassIDType.Transform)
-                {
-                    switch (b.attribute)
-                    {
-                        case 1: //kBindTransformPosition
-                        case 3: //kBindTransformScale
-                        case 4: //kBindTransformEuler
-                            curves += 3;
-                            break;
-                        case 2: //kBindTransformRotation
-                            curves += 4;
-                            break;
-                        default:
-                            curves += 1;
-                            break;
-                    }
-                }
-                else
-                {
-                    curves += 1;
-                }
-                if (curves > index)
-                {
-                    return b;
-                }
+                return null;
             }
 
-            return null;
+            var map = curveIndexToBinding;
+            if (map == null)
+            {
+                map = BuildCurveIndexMap();
+                // Published as a whole: a second thread either sees null and rebuilds the same
+                // table, or sees a table that is already complete.
+                curveIndexToBinding = map;
+            }
+
+            return index < map.Length ? map[index] : null;
+        }
+
+        private GenericBinding[] BuildCurveIndexMap()
+        {
+            var total = 0;
+            foreach (var b in genericBindings)
+            {
+                total += CurveCount(b);
+            }
+
+            var map = new GenericBinding[total];
+            var next = 0;
+            foreach (var b in genericBindings)
+            {
+                var count = CurveCount(b);
+                for (var i = 0; i < count; i++)
+                {
+                    map[next++] = b;
+                }
+            }
+            return map;
+        }
+
+        private static int CurveCount(GenericBinding b)
+        {
+            if (b.typeID != ClassIDType.Transform)
+            {
+                return 1;
+            }
+            switch (b.attribute)
+            {
+                case 1: //kBindTransformPosition
+                case 3: //kBindTransformScale
+                case 4: //kBindTransformEuler
+                    return 3;
+                case 2: //kBindTransformRotation
+                    return 4;
+                default:
+                    return 1;
+            }
         }
     }
 

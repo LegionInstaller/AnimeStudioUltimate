@@ -8,13 +8,16 @@ using System.Threading.Tasks;
 
 namespace AnimeStudio
 {
-    public class VFSFile
+    public class VFSFile : IBundleContainer
     {
         private List<BundleFile.StorageBlock> m_BlocksInfo;
         private List<BundleFile.Node> m_DirectoryInfo;
 
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
+
+        BundleFile.Header IBundleContainer.Header => m_Header;
+        List<StreamFile> IBundleContainer.Files => fileList;
         public long Offset;
 
         public VFSFile(FileReader reader, string path, GameType game)

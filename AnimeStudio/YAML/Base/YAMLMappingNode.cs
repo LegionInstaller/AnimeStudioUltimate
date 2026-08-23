@@ -9,6 +9,19 @@ namespace AnimeStudio
 		{
 		}
 
+		/// <summary>
+		/// For nodes whose child count is known: a List grows 0 -> 4 -> 8, so an eight-entry
+		/// node such as a 2018+ Keyframe allocated its backing array twice and copied it.
+		/// Animation YAML emits one of those per keyframe.
+		/// </summary>
+		public YAMLMappingNode(int capacity)
+		{
+			if (capacity > 0)
+			{
+				m_children.Capacity = capacity;
+			}
+		}
+
 		public YAMLMappingNode(MappingStyle style)
 		{
 			Style = style;

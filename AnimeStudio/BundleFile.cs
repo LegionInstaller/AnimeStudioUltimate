@@ -46,7 +46,7 @@ namespace AnimeStudio
         Oodle = 9,
     }
 
-    public class BundleFile
+    public class BundleFile : IBundleContainer
     {
         public class Header
         {
@@ -121,6 +121,9 @@ namespace AnimeStudio
         private long blocksDataLength;
 
         public List<StreamFile> fileList;
+
+        BundleFile.Header IBundleContainer.Header => m_Header;
+        List<StreamFile> IBundleContainer.Files => fileList;
         
         private bool HasUncompressedDataHash = true;
         private bool HasBlockInfoNeedPaddingAtStart = true;

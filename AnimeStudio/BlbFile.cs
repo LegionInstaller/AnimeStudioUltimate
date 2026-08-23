@@ -8,7 +8,7 @@ using System.Text;
 
 namespace AnimeStudio
 {
-    public class Blb3File
+    public class Blb3File : IBundleContainer
     {
         private List<BundleFile.StorageBlock> m_BlocksInfo;
         private List<BundleFile.Node> m_DirectoryInfo;
@@ -16,6 +16,9 @@ namespace AnimeStudio
 
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
+
+        BundleFile.Header IBundleContainer.Header => m_Header;
+        List<StreamFile> IBundleContainer.Files => fileList;
         public long Offset;
 
         public Blb3File(FileReader reader, string path)

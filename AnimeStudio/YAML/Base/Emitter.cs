@@ -101,15 +101,32 @@ namespace AnimeStudio
 		public Emitter Write(float value)
 		{
 			WriteDelayed();
-			m_stream.Write(value);
+			WriteFormatted(value);
 			return this;
 		}
 
 		public Emitter Write(double value)
 		{
 			WriteDelayed();
-			m_stream.Write(value);
+			WriteFormatted(value);
 			return this;
+		}
+
+		// TextWriter.Write(float) formats into a fresh string and then writes it. Animation YAML
+		// emits tens of millions of floats, so that is tens of millions of throwaway strings.
+		// TryFormat writes into a stack buffer and produces the exact same text for the same
+		// format provider, which is the one TextWriter.Write would have used.
+		private void WriteFormatted<T>(T value) where T : ISpanFormattable
+		{
+			Span<char> buffer = stackalloc char[32];
+			if (value.TryFormat(buffer, out int written, default, m_stream.FormatProvider))
+			{
+				m_stream.Write(buffer.Slice(0, written));
+			}
+			else
+			{
+				m_stream.Write(value.ToString(null, m_stream.FormatProvider));
+			}
 		}
 
 		public Emitter Write(string value)

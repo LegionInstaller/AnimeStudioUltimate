@@ -70,6 +70,7 @@ namespace AnimeStudio.GUI
             enablePreview = new System.Windows.Forms.ToolStripMenuItem();
             enableModelPreview = new System.Windows.Forms.ToolStripMenuItem();
             modelsOnly = new System.Windows.Forms.ToolStripMenuItem();
+            showSupersededVariants = new System.Windows.Forms.ToolStripMenuItem();
             displayInfo = new System.Windows.Forms.ToolStripMenuItem();
             debugToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             toolStripMenuItem15 = new System.Windows.Forms.ToolStripMenuItem();
@@ -434,7 +435,7 @@ namespace AnimeStudio.GUI
             // 
             // toolStripMenuItem21
             // 
-            toolStripMenuItem21.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] { displayAll, enablePreview, enableModelPreview, modelsOnly, displayInfo });
+            toolStripMenuItem21.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] { displayAll, enablePreview, enableModelPreview, modelsOnly, showSupersededVariants, displayInfo });
             toolStripMenuItem21.Name = "toolStripMenuItem21";
             toolStripMenuItem21.Size = new System.Drawing.Size(442, 44);
             toolStripMenuItem21.Text = "Advanced";
@@ -472,7 +473,16 @@ namespace AnimeStudio.GUI
             modelsOnly.Name = "modelsOnly";
             modelsOnly.Size = new System.Drawing.Size(416, 44);
             modelsOnly.Text = "Filter models only";
-            // 
+            //
+            // showSupersededVariants
+            //
+            showSupersededVariants.CheckOnClick = true;
+            showSupersededVariants.Name = "showSupersededVariants";
+            showSupersededVariants.Size = new System.Drawing.Size(416, 44);
+            showSupersededVariants.Text = "Show same-name variants";
+            showSupersededVariants.ToolTipText = "When several assets share a name and the model's own reference identifies one of them, the others are hidden. Check this to list them all again. Nothing is ever removed from the loaded data.";
+            showSupersededVariants.CheckedChanged += showSupersededVariants_CheckedChanged;
+            //
             // displayInfo
             // 
             displayInfo.Checked = true;
@@ -1714,6 +1724,7 @@ namespace AnimeStudio.GUI
         private System.Windows.Forms.ToolStripMenuItem enablePreview;
         private System.Windows.Forms.ToolStripMenuItem enableModelPreview;
         private System.Windows.Forms.ToolStripMenuItem modelsOnly;
+        private System.Windows.Forms.ToolStripMenuItem showSupersededVariants;
         private System.Windows.Forms.ToolStripMenuItem displayInfo;
         private System.Windows.Forms.ToolStripMenuItem debugToolStripMenuItem;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem15;

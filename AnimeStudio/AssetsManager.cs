@@ -28,6 +28,33 @@ namespace AnimeStudio
 
         /// <summary>Number of cached resource streams (for map-builder flush decisions).</summary>
         public int ResourceFileCount => resourceFileReaders.Count;
+
+        /// <summary>
+        /// Assets a loaded model demonstrably uses, established from a reference in the data:
+        /// a renderer's own serialized PPtr, or a container id resolved from the asset path a
+        /// NapLodController records. Never from a name match.
+        /// </summary>
+        /// <remarks>
+        /// One ZZZ character ships several assets under the same name, in different blocks and
+        /// with different path IDs. Membership here is the difference between "this is the copy
+        /// the model points at" and "this shares a name with it". Absence proves nothing -- a
+        /// model may simply not be loaded -- so callers must treat an empty or partial set as
+        /// "cannot tell", not as "unused".
+        /// </remarks>
+        public HashSet<Object> ModelLinkedAssets { get; } = new HashSet<Object>();
+
+        /// <summary>
+        /// Assets resolved through a container id, i.e. through the asset path the game itself
+        /// records for the reference. A subset of <see cref="ModelLinkedAssets"/>.
+        /// </summary>
+        public HashSet<Object> ContainerLinkedAssets { get; } = new HashSet<Object>();
+
+        /// <summary>
+        /// The readable asset path a container-resolved asset was reached by. ZZZ stores only the
+        /// hash of this path in the bundle, so without it two same-named assets are indistinguishable
+        /// in a browser unless an external path map happens to be installed.
+        /// </summary>
+        public Dictionary<Object, string> ResolvedAssetPaths { get; } = new Dictionary<Object, string>();
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
 
@@ -773,6 +800,9 @@ namespace AnimeStudio
             resourceFileReaders.Clear();
 
             assetsFileIndexCache.Clear();
+            ModelLinkedAssets.Clear();
+            ContainerLinkedAssets.Clear();
+            ResolvedAssetPaths.Clear();
         }
 
         public void Clear()
@@ -1013,6 +1043,15 @@ namespace AnimeStudio
                                 }
                             }
                         }
+                        // Every mesh reference that was serialized into the file, from any
+                        // GameObject rather than only an avatar's direct children. A same-named
+                        // asset may only be treated as superseded when nothing points at it, so
+                        // this set has to be complete or it would hide a mesh that is in use.
+                        // Runs before the SeparateMesh pass, so nothing this manager assigned by
+                        // name can leak in here.
+                        RecordModelLink(m_GameObject.m_SkinnedMeshRenderer?.m_Mesh);
+                        RecordModelLink(m_GameObject.m_MeshFilter?.m_Mesh);
+
                         // Ordinal: these are fixed ASCII markers in asset names, and the default
                         // culture-sensitive overloads went through ICU for every GameObject in
                         // the load -- 5.8% of load CPU on this single line.
@@ -1141,6 +1180,17 @@ namespace AnimeStudio
                             {
                                 attachedBy[candidate.Strategy]++;
                                 attached = true;
+                                // Only the container routes prove which same-named mesh this is;
+                                // the name routes pick one out of a group and cannot vouch for it.
+                                if (candidate.ByContainer && lookup[candidate.Key].TryGet(out var linkedMesh))
+                                {
+                                    ModelLinkedAssets.Add(linkedMesh);
+                                    ContainerLinkedAssets.Add(linkedMesh);
+                                    if (candidate.AssetPath != null)
+                                    {
+                                        ResolvedAssetPaths[linkedMesh] = candidate.AssetPath;
+                                    }
+                                }
                                 break;
                             }
                         }
@@ -1161,20 +1211,35 @@ namespace AnimeStudio
         }
 
         /// <summary>
+        /// Notes the asset a resolvable reference points at as one a model actually uses.
+        /// Silently ignores a null or unresolvable pointer -- absence is not evidence.
+        /// </summary>
+        private void RecordModelLink<T>(PPtr<T> pptr) where T : Object
+        {
+            if (pptr != null && !pptr.IsNull && pptr.TryGet(out T target))
+            {
+                ModelLinkedAssets.Add(target);
+            }
+        }
+
+        /// <summary>
         /// One thing to look a mesh up by, and which table to look it up in.
         /// </summary>
         private readonly struct MeshCandidate
         {
-            public MeshCandidate(string key, bool byContainer, int strategy)
+            public MeshCandidate(string key, bool byContainer, int strategy, string assetPath = null)
             {
                 Key = key;
                 ByContainer = byContainer;
                 Strategy = strategy;
+                AssetPath = assetPath;
             }
 
             public string Key { get; }
             public bool ByContainer { get; }
             public int Strategy { get; }
+            /// <summary>The readable path the container id was derived from, for container candidates.</summary>
+            public string AssetPath { get; }
         }
 
         /// <summary>
@@ -1206,7 +1271,7 @@ namespace AnimeStudio
 
                 // The container id is what the AssetBundle recorded for this exact asset, so it
                 // survives several meshes sharing a name.
-                yield return new MeshCandidate(ContainerId(path), true, 0);
+                yield return new MeshCandidate(ContainerId(path), true, 0, path);
 
                 var lastSlash = path.LastIndexOf('/');
                 var name = lastSlash >= 0 && lastSlash < path.Length - 1 ? path.Substring(lastSlash + 1) : path;
@@ -1230,7 +1295,8 @@ namespace AnimeStudio
                 var folder = rootName.EndsWith("_Model", StringComparison.Ordinal) ? rootName : rootName + "_Model";
                 foreach (var prefix in pathPrefixes)
                 {
-                    yield return new MeshCandidate(ContainerId(prefix + folder + "/" + childName + ".mesh"), true, 1);
+                    var derived = prefix + folder + "/" + childName + ".mesh";
+                    yield return new MeshCandidate(ContainerId(derived), true, 1, derived);
                 }
             }
 

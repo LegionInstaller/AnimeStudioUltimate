@@ -278,6 +278,15 @@ namespace AnimeStudio.GUI
                         asset.Container = z3Path;
                         continue;
                     }
+                    // ZZZ stores only the hash of the asset path, so without the external path
+                    // map the column reads as a bare number and same-named assets look alike.
+                    // Loading recovered the real path for everything it resolved through a
+                    // container id; use it rather than leave the user with the hash.
+                    if (assetsManager.ResolvedAssetPaths.TryGetValue(asset.Asset, out var linkedPath))
+                    {
+                        asset.Container = linkedPath;
+                        continue;
+                    }
                     if (int.TryParse(asset.Container, out var value))
                     {
                         var last = unchecked((uint)value);

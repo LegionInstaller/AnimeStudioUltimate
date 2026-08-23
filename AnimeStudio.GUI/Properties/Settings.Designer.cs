@@ -386,6 +386,18 @@ namespace AnimeStudio.GUI.Properties {
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool showSupersededVariants {
+            get {
+                return ((bool)(this["showSupersededVariants"]));
+            }
+            set {
+                this["showSupersededVariants"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
         public bool enableModelPreview {
             get {
                 return ((bool)(this["enableModelPreview"]));

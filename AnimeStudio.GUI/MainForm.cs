@@ -195,6 +195,7 @@ namespace AnimeStudio.GUI
             enablePreview.Checked = Properties.Settings.Default.enablePreview;
             enableModelPreview.Checked = Properties.Settings.Default.enableModelPreview;
             modelsOnly.Checked = Properties.Settings.Default.modelsOnly;
+            showSupersededVariants.Checked = Properties.Settings.Default.showSupersededVariants;
             enableResolveDependencies.Checked = Properties.Settings.Default.enableResolveDependencies;
             allowDuplicates.Checked = Properties.Settings.Default.allowDuplicates;
             useBundleContainerNameToolStripMenuItem.Checked = Properties.Settings.Default.useBundleContainerName;
@@ -2143,6 +2144,49 @@ namespace AnimeStudio.GUI
             return selectedAssets;
         }
 
+        /// <summary>
+        /// Drops assets that share a name and type with one the loaded model demonstrably uses.
+        /// </summary>
+        /// <remarks>
+        /// A ZZZ character ships several assets under one name -- Remielle has five meshes called
+        /// "Remielle_Face" in five blocks -- and the list showed them as equals, with nothing to
+        /// tell them apart but a path ID. Where a model's own reference resolves the ambiguity,
+        /// through the asset path a NapLodController records and the container id derived from
+        /// it, only that asset stays in the list.
+        ///
+        /// This never runs on a guess: a group is only reduced when one of its members was
+        /// reached that way. If nothing resolved, every variant stays. And a hidden asset is
+        /// still loaded and still exportable -- "Show same-name variants" brings the list back.
+        /// The hidden ones are not necessarily unused; some belong to other prefabs that ship
+        /// their own copy, which is exactly why this hides rather than deletes.
+        /// </remarks>
+        private void HideSupersededVariants()
+        {
+            var resolved = Studio.assetsManager.ContainerLinkedAssets;
+            if (resolved.Count == 0)
+            {
+                return;
+            }
+
+            var groups = new Dictionary<(ClassIDType, string), bool>();
+            foreach (var asset in visibleAssets)
+            {
+                var key = (asset.Type, asset.Text);
+                if (groups.TryGetValue(key, out var hasResolved))
+                {
+                    // Seen before, so the group has more than one member; note if any is resolved.
+                    groups[key] = hasResolved || resolved.Contains(asset.Asset);
+                }
+                else
+                {
+                    groups[key] = resolved.Contains(asset.Asset);
+                }
+            }
+
+            visibleAssets = visibleAssets.FindAll(x =>
+                !groups[(x.Type, x.Text)] || resolved.Contains(x.Asset));
+        }
+
         private void FilterAssetList()
         {
             assetListView.BeginUpdate();
@@ -2182,6 +2226,10 @@ namespace AnimeStudio.GUI
                         visibleAssets.Remove(model);
                     }
                 }
+            }
+            if (!Properties.Settings.Default.showSupersededVariants)
+            {
+                HideSupersededVariants();
             }
             if (!string.IsNullOrEmpty(listSearch.Text))
             {
@@ -2430,6 +2478,17 @@ namespace AnimeStudio.GUI
             }
 
         }
+        private void showSupersededVariants_CheckedChanged(object sender, EventArgs e)
+        {
+            Properties.Settings.Default.showSupersededVariants = showSupersededVariants.Checked;
+            Properties.Settings.Default.Save();
+
+            if (visibleAssets.Count > 0)
+            {
+                FilterAssetList();
+            }
+        }
+
         private void modelsOnly_CheckedChanged(object sender, EventArgs e)
         {
             Properties.Settings.Default.modelsOnly = modelsOnly.Checked;

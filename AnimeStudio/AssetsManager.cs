@@ -31,7 +31,10 @@ namespace AnimeStudio
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
 
-        internal Dictionary<string, int> assetsFileIndexCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // Concurrent: PPtr resolution fills this lazily, and resolving a PPtr happens during
+        // export from whatever thread is exporting -- Material JSON alone does it for every
+        // referenced object. A plain Dictionary written from several threads corrupts.
+        internal ConcurrentDictionary<string, int> assetsFileIndexCache = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         // Concurrent: ResourceReader opens and registers a resource stream lazily, and that
         // can now happen from several threads at once while ReadAssets parses files in parallel.
         internal ConcurrentDictionary<string, BinaryReader> resourceFileReaders = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);

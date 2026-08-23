@@ -58,7 +58,7 @@ namespace AnimeStudio
                     if (!assetsFileIndexCache.TryGetValue(name, out index))
                     {
                         index = assetsFileList.FindIndex(x => x.fileName.Equals(name, StringComparison.OrdinalIgnoreCase));
-                        assetsFileIndexCache.Add(name, index);
+                        assetsFileIndexCache.TryAdd(name, index);
                     }
                 }
 
@@ -139,7 +139,7 @@ namespace AnimeStudio
             if (!assetsFileIndexCache.TryGetValue(name, out index))
             {
                 index = assetsFileList.FindIndex(x => x.fileName.Equals(name, StringComparison.OrdinalIgnoreCase));
-                assetsFileIndexCache.Add(name, index);
+                assetsFileIndexCache.TryAdd(name, index);
             }
 
             m_PathID = m_Object.m_PathID;

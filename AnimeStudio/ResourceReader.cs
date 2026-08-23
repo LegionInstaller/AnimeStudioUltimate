@@ -88,27 +88,42 @@ namespace AnimeStudio
             }
         }
 
+        // Seek and read have to happen together. One resource stream is shared by every asset
+        // that points into the same .resS -- across serialized file boundaries, so splitting the
+        // work per file does not separate them. Locking the reader itself keeps the contention
+        // per resource file rather than global, and the expensive part of an export (decoding,
+        // encoding) happens outside these methods.
+
         public byte[] GetData()
         {
             var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
-            return binaryReader.ReadBytes((int)size);
+            lock (binaryReader)
+            {
+                binaryReader.BaseStream.Position = offset;
+                return binaryReader.ReadBytes((int)size);
+            }
         }
 
         public void GetData(byte[] buff)
         {
             var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
-            binaryReader.Read(buff, 0, (int)size);
+            lock (binaryReader)
+            {
+                binaryReader.BaseStream.Position = offset;
+                binaryReader.Read(buff, 0, (int)size);
+            }
         }
 
         public void WriteData(string path)
         {
             var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
             using (var writer = File.OpenWrite(path))
             {
-                binaryReader.BaseStream.CopyTo(writer, size);
+                lock (binaryReader)
+                {
+                    binaryReader.BaseStream.Position = offset;
+                    binaryReader.BaseStream.CopyTo(writer, size);
+                }
             }
         }
     }

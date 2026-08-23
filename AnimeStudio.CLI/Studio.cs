@@ -1,4 +1,7 @@
 ﻿using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
@@ -391,78 +394,169 @@ namespace AnimeStudio.CLI
             }
         }
 
+        /// <summary>
+        /// Directory an asset is exported into. Depends only on the asset and the grouping
+        /// option, never on what has been exported before.
+        /// </summary>
+        private static string GroupDirectory(string savePath, AssetItem asset, AssetGroupOption assetGroupOption)
+        {
+            string exportPath;
+            switch (assetGroupOption)
+            {
+                case AssetGroupOption.ByType: //type name
+                    exportPath = Path.Combine(savePath, asset.TypeString);
+                    break;
+                case AssetGroupOption.ByContainer: //container path
+                    if (!string.IsNullOrEmpty(asset.Container))
+                    {
+                        exportPath = Path.HasExtension(asset.Container) ? Path.Combine(savePath, Path.GetDirectoryName(asset.Container)) : Path.Combine(savePath, asset.Container);
+                    }
+                    else
+                    {
+                        exportPath = Path.Combine(savePath, asset.TypeString);
+                    }
+                    break;
+                case AssetGroupOption.BySource: //source file
+                    if (string.IsNullOrEmpty(asset.SourceFile.originalPath))
+                    {
+                        exportPath = Path.Combine(savePath, asset.SourceFile.fileName + "_export");
+                    }
+                    else
+                    {
+                        exportPath = Path.Combine(savePath, Path.GetFileName(asset.SourceFile.originalPath) + "_export", asset.SourceFile.fileName);
+                    }
+                    break;
+                default:
+                    exportPath = savePath;
+                    break;
+            }
+            return exportPath + Path.DirectorySeparatorChar;
+        }
+
+        /// <summary>
+        /// Whether this asset type may be exported off the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// Excluded, each for a concrete reason rather than caution:
+        /// Animator and GameObject go through the FBX exporter, which passes the output
+        /// directory through the process-wide current directory; Shader calls D3DDisassemble,
+        /// which Microsoft documents as not thread safe; AudioClip builds and tears down a
+        /// whole FMOD system per clip; MonoBehaviour can pull in the Mono.Cecil assembly
+        /// loader, whose ModuleDefinition caches metadata lazily and is not thread safe.
+        /// Everything else reads its own serialized file (which the partitioning keeps to one
+        /// thread) or a resource stream (which ResourceReader locks).
+        /// </remarks>
+        private static bool CanExportConcurrently(ClassIDType type)
+        {
+            switch (type)
+            {
+                case ClassIDType.Animator:
+                case ClassIDType.GameObject:
+                case ClassIDType.Shader:
+                case ClassIDType.AudioClip:
+                case ClassIDType.MonoBehaviour:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
         public static void ExportAssets(string savePath, List<AssetItem> toExportAssets, AssetGroupOption assetGroupOption, ExportType exportType)
         {
             int toExportCount = toExportAssets.Count;
             int exportedCount = 0;
-            foreach (var asset in toExportAssets)
+            int startedCount = 0;
+
+            var directories = new string[toExportCount];
+            for (int i = 0; i < toExportCount; i++)
             {
-                string exportPath;
-                switch (assetGroupOption)
+                directories[i] = GroupDirectory(savePath, toExportAssets[i], assetGroupOption);
+            }
+
+            // An export only depends on the order it runs in when a second asset would land on
+            // the same directory and base name -- that is when TryExportFile starts probing for
+            // a free "name (n)". Count those up front. Everything whose name is unique gets the
+            // same path no matter which thread writes it, so it can run concurrently and the
+            // result is identical to the serial run. The rest stays serial, in list order.
+            var nameCounts = new Dictionary<string, int>(toExportCount, StringComparer.OrdinalIgnoreCase);
+            var keys = new string[toExportCount];
+            for (int i = 0; i < toExportCount; i++)
+            {
+                var key = directories[i] + "\0" + Exporter.FixFileName(toExportAssets[i].Text);
+                keys[i] = key;
+                nameCounts.TryGetValue(key, out var seen);
+                nameCounts[key] = seen + 1;
+            }
+
+            var concurrent = new List<int>();
+            var serial = new List<int>();
+            for (int i = 0; i < toExportCount; i++)
+            {
+                if (nameCounts[keys[i]] == 1 && CanExportConcurrently(toExportAssets[i].Type))
                 {
-                    case AssetGroupOption.ByType: //type name
-                        exportPath = Path.Combine(savePath, asset.TypeString);
-                        break;
-                    case AssetGroupOption.ByContainer: //container path
-                        if (!string.IsNullOrEmpty(asset.Container))
-                        {
-                            exportPath = Path.HasExtension(asset.Container) ? Path.Combine(savePath, Path.GetDirectoryName(asset.Container)) : Path.Combine(savePath, asset.Container);
-                        }
-                        else
-                        {
-                            exportPath = Path.Combine(savePath, asset.TypeString);
-                        }
-                        break;
-                    case AssetGroupOption.BySource: //source file
-                        if (string.IsNullOrEmpty(asset.SourceFile.originalPath))
-                        {
-                            exportPath = Path.Combine(savePath, asset.SourceFile.fileName + "_export");
-                        }
-                        else
-                        {
-                            exportPath = Path.Combine(savePath, Path.GetFileName(asset.SourceFile.originalPath) + "_export", asset.SourceFile.fileName);
-                        }
-                        break;
-                    default:
-                        exportPath = savePath;
-                        break;
+                    concurrent.Add(i);
                 }
-                exportPath += Path.DirectorySeparatorChar;
-                Logger.Info($"[{exportedCount}/{toExportCount}] Exporting {asset.TypeString}: {asset.Text}");
+                else
+                {
+                    serial.Add(i);
+                }
+            }
+
+            void RunOne(int index)
+            {
+                var asset = toExportAssets[index];
+                Logger.Info($"[{Interlocked.Increment(ref startedCount) - 1}/{toExportCount}] Exporting {asset.TypeString}: {asset.Text}");
                 try
                 {
+                    bool ok;
                     switch (exportType)
                     {
-                        case ExportType.Raw:
-                            if (ExportRawFile(asset, exportPath))
-                            {
-                                exportedCount++;
-                            }
-                            break;
-                        case ExportType.Dump:
-                            if (ExportDumpFile(asset, exportPath))
-                            {
-                                exportedCount++;
-                            }
-                            break;
-                        case ExportType.Convert:
-                            if (ExportConvertFile(asset, exportPath))
-                            {
-                                exportedCount++;
-                            }
-                            break;
-                        case ExportType.JSON:
-                            if (ExportJSONFile(asset, exportPath))
-                            {
-                                exportedCount++;
-                            }
-                            break;
+                        case ExportType.Raw: ok = ExportRawFile(asset, directories[index]); break;
+                        case ExportType.Dump: ok = ExportDumpFile(asset, directories[index]); break;
+                        case ExportType.Convert: ok = ExportConvertFile(asset, directories[index]); break;
+                        case ExportType.JSON: ok = ExportJSONFile(asset, directories[index]); break;
+                        default: ok = false; break;
+                    }
+                    if (ok)
+                    {
+                        Interlocked.Increment(ref exportedCount);
                     }
                 }
                 catch (Exception ex)
                 {
                     Logger.Error($"Export {asset.Type}:{asset.Text} error\r\n{ex.Message}\r\n{ex.StackTrace}");
                 }
+            }
+
+            var degree = Math.Max(1, AssetsManager.MaxParallelism);
+            if (degree > 1 && concurrent.Count > 1)
+            {
+                // Objects of one serialized file share a single reader position, so a file is
+                // only ever touched by one thread. NoBuffering hands out one group at a time
+                // because the number of assets per file varies enormously.
+                var groups = concurrent
+                    .GroupBy(i => toExportAssets[i].SourceFile)
+                    .ToList();
+                var options = new ParallelOptions { MaxDegreeOfParallelism = degree };
+                Parallel.ForEach(Partitioner.Create(groups, EnumerablePartitionerOptions.NoBuffering), options, group =>
+                {
+                    foreach (var index in group)
+                    {
+                        RunOne(index);
+                    }
+                });
+            }
+            else
+            {
+                foreach (var index in concurrent)
+                {
+                    RunOne(index);
+                }
+            }
+
+            foreach (var index in serial)
+            {
+                RunOne(index);
             }
 
             var statusText = exportedCount == 0 ? "Nothing exported." : $"Finished exporting {exportedCount} assets.";

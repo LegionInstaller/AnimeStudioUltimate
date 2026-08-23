@@ -906,13 +906,19 @@ namespace AnimeStudio
             Logger.Info("Process Assets...");
 
             var separateMeshes = new Dictionary<string, PPtr<Mesh>>();
+            // Container id -> mesh. The id is what an AssetBundle records for the asset, so this
+            // is the game's own reference table rather than a guess. A NapLodController stores
+            // the full asset path of the mesh it drives, and ZZZ derives the container id from
+            // that path, so the two can be joined into an exact link. Names alone cannot: one
+            // character ships several meshes called e.g. "Remielle_Face" -- same name, different
+            // path IDs, different blocks, and only some of them carry blendshapes.
+            var meshesByContainer = new Dictionary<string, PPtr<Mesh>>(StringComparer.Ordinal);
             var avatars = new List<GameObject>();
             var fileID = 0;
 
             if (Game.Type.IsZZZGroup())
-            {   
+            {
                 // TODO: Refactor this to decrease the number of meshes. Possibly do this after we build the hierarchy to discover unused meshes (which are likely to be SeparateMeshes...)
-                // TODO: Somehow RE the behavior used to swap meshes to determine exact mappings instead of guessing by name...
                 foreach (var assetsFile in assetsFileList)
                 {
                     foreach (var obj in assetsFile.Objects)
@@ -942,12 +948,26 @@ namespace AnimeStudio
                                 throw new Exception($"Invalid PPtr for {obj.Name}");
                             }
                         }
+                        else if (obj is AssetBundle bundle)
+                        {
+                            foreach (var entry in bundle.m_Container)
+                            {
+                                if (entry.Value?.asset == null || meshesByContainer.ContainsKey(entry.Key))
+                                {
+                                    continue;
+                                }
+                                if (entry.Value.asset.TryGet<Mesh>(out var contained))
+                                {
+                                    meshesByContainer.Add(entry.Key, new PPtr<Mesh>(0, contained.m_PathID, contained.assetsFile));
+                                }
+                            }
+                        }
                     }
                     fileID++;
                 }
-                Logger.Info($"Found {separateMeshes.Count} SeparateMeshes");
+                Logger.Info($"Found {separateMeshes.Count} SeparateMeshes, {meshesByContainer.Count} meshes reachable by container id");
             }
-            
+
             foreach (var assetsFile in assetsFileList)
             {
                 foreach (var obj in assetsFile.Objects)
@@ -1041,9 +1061,56 @@ namespace AnimeStudio
             {
                 Logger.Info($"Found {avatars.Count} Avatars");
 
-                // Per-strategy tallies so the two routes can be compared on real data.
-                var attachedBy = new int[3];
+                // Per-strategy tallies so the routes can be compared on real data.
+                var attachedBy = new int[5];
                 var unattached = 0;
+
+                // Read every NapLodController once. The paths are needed twice -- to resolve the
+                // child that carries the component, and to learn the folder layout for sibling
+                // avatars that ship without one -- and GetRawData is not free.
+                var napPaths = new Dictionary<MonoBehaviour, string>();
+                var pathPrefixes = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var avatar in avatars)
+                {
+                    if (avatar.m_Transform == null)
+                    {
+                        continue;
+                    }
+                    foreach (var childPtr in avatar.m_Transform.m_Children)
+                    {
+                        if (!childPtr.TryGet(out var child) || !child.m_GameObject.TryGet(out var childGO))
+                        {
+                            continue;
+                        }
+                        foreach (var component in childGO.m_Components)
+                        {
+                            if (!component.TryGet<MonoBehaviour>(out var comp)
+                                || comp.Name != "NapLodController"
+                                || napPaths.ContainsKey(comp))
+                            {
+                                continue;
+                            }
+                            var path = MeshPathFromNapLodController(comp);
+                            napPaths[comp] = path;
+                            if (path == null)
+                            {
+                                continue;
+                            }
+                            var folderEnd = path.LastIndexOf('/');
+                            var prefixEnd = folderEnd > 0 ? path.LastIndexOf('/', folderEnd - 1) : -1;
+                            if (prefixEnd > 0)
+                            {
+                                pathPrefixes.Add(path.Substring(0, prefixEnd + 1));
+                            }
+                        }
+                    }
+                }
+                if (pathPrefixes.Count == 0)
+                {
+                    // Nothing in this load said where meshes live, so fall back to the only
+                    // layout ZZZ has been observed to use.
+                    pathPrefixes.Add(DiscreteMeshFolder);
+                }
 
                 foreach (var avatar in avatars)
                 {
@@ -1062,17 +1129,17 @@ namespace AnimeStudio
                             continue;
                         }
 
-                        // Two strategies exist for naming a ZZZ separate mesh and neither covers
-                        // every asset: the NapLodController component records the real asset path
-                        // (precise, but the component is not always present), while _Model bundles
-                        // follow the SeparateMesh_<avatar>_<child> convention. Try them in order of
-                        // precision and stop at the first one that attaches.
+                        // Candidates run from an exact link down to a guess: a container id
+                        // identifies one specific mesh, a file name only identifies a group of
+                        // same-named ones, and the _Model naming conventions are pure inference.
+                        // Stop at the first hit.
                         var attached = false;
-                        foreach (var (candidate, strategy) in SeparateMeshCandidates(childGO, rootName))
+                        foreach (var candidate in SeparateMeshCandidates(childGO, rootName, napPaths, pathPrefixes))
                         {
-                            if (TryAttachSeparateMesh(childGO, candidate, separateMeshes))
+                            var lookup = candidate.ByContainer ? meshesByContainer : separateMeshes;
+                            if (TryAttachSeparateMesh(childGO, candidate.Key, lookup))
                             {
-                                attachedBy[strategy]++;
+                                attachedBy[candidate.Strategy]++;
                                 attached = true;
                                 break;
                             }
@@ -1089,41 +1156,112 @@ namespace AnimeStudio
                     }
                 }
 
-                Logger.Info($"SeparateMesh attached: {attachedBy[0]} via NapLodController, {attachedBy[1]} via name scheme, {attachedBy[2]} via child name; {unattached} renderers left without a mesh");
+                Logger.Info($"SeparateMesh attached: {attachedBy[0]} via container id, {attachedBy[1]} via derived container id, {attachedBy[2]} via NapLodController name, {attachedBy[3]} via name scheme, {attachedBy[4]} via child name; {unattached} renderers left without a mesh");
             }
         }
 
         /// <summary>
-        /// Mesh names to try for a child of a ZZZ avatar, most specific first, each tagged with
-        /// the strategy that produced it (0 = NapLodController, 1 = name scheme, 2 = child name).
+        /// One thing to look a mesh up by, and which table to look it up in.
         /// </summary>
-        private static IEnumerable<(string Name, int Strategy)> SeparateMeshCandidates(GameObject childGO, string rootName)
+        private readonly struct MeshCandidate
+        {
+            public MeshCandidate(string key, bool byContainer, int strategy)
+            {
+                Key = key;
+                ByContainer = byContainer;
+                Strategy = strategy;
+            }
+
+            public string Key { get; }
+            public bool ByContainer { get; }
+            public int Strategy { get; }
+        }
+
+        /// <summary>
+        /// Where ZZZ keeps the meshes a NapLodController points at. Only used when a load
+        /// contains no NapLodController at all to read the layout from.
+        /// </summary>
+        private const string DiscreteMeshFolder = "Assets/OriginalResRepos/ART/DiscreteMeshAssets/";
+
+        /// <summary>
+        /// Lookups to try for a child of a ZZZ avatar, most specific first, each tagged with the
+        /// strategy that produced it (0 = container id, 1 = derived container id,
+        /// 2 = NapLodController file name, 3 = name scheme, 4 = child name).
+        /// </summary>
+        private static IEnumerable<MeshCandidate> SeparateMeshCandidates(GameObject childGO, string rootName,
+            Dictionary<MonoBehaviour, string> napPaths, HashSet<string> pathPrefixes)
         {
             var childName = childGO.Name;
+            var hasNapPath = false;
 
             foreach (var component in childGO.m_Components)
             {
-                if (!component.TryGet<MonoBehaviour>(out var comp) || comp.Name != "NapLodController")
+                if (!component.TryGet<MonoBehaviour>(out var comp)
+                    || !napPaths.TryGetValue(comp, out var path)
+                    || string.IsNullOrEmpty(path))
                 {
                     continue;
                 }
+                hasNapPath = true;
 
-                var name = MeshNameFromNapLodController(comp);
+                // The container id is what the AssetBundle recorded for this exact asset, so it
+                // survives several meshes sharing a name.
+                yield return new MeshCandidate(ContainerId(path), true, 0);
+
+                var lastSlash = path.LastIndexOf('/');
+                var name = lastSlash >= 0 && lastSlash < path.Length - 1 ? path.Substring(lastSlash + 1) : path;
+                var dot = name.LastIndexOf('.');
+                if (dot > 0)
+                {
+                    name = name.Substring(0, dot);
+                }
                 if (!string.IsNullOrEmpty(name))
                 {
-                    yield return (name, 0);
+                    yield return new MeshCandidate(name, false, 2);
                 }
             }
 
-            yield return ("SeparateMesh_" + rootName + "_" + childName, 1);
-            yield return (childName, 2);
+            // A _Model prefab carries no NapLodController, but its meshes sit in a folder named
+            // after it. Rebuilding that path and hashing it either hits the container table --
+            // in which case the link is as exact as the component's own -- or misses, and the
+            // name-based guesses below still get their turn.
+            if (!hasNapPath && !string.IsNullOrEmpty(childName))
+            {
+                var folder = rootName.EndsWith("_Model", StringComparison.Ordinal) ? rootName : rootName + "_Model";
+                foreach (var prefix in pathPrefixes)
+                {
+                    yield return new MeshCandidate(ContainerId(prefix + folder + "/" + childName + ".mesh"), true, 1);
+                }
+            }
+
+            yield return new MeshCandidate("SeparateMesh_" + rootName + "_" + childName, false, 3);
+            yield return new MeshCandidate(childName, false, 4);
         }
 
         /// <summary>
-        /// Extracts the mesh name out of a NapLodController's raw asset path.
-        /// Returns null when the component does not carry a usable path.
+        /// The id an AssetBundle stores for an asset at <paramref name="path"/>: ZZZ keys its
+        /// container table by the XXH64 of the lowercased path rather than by the path itself.
         /// </summary>
-        private static string MeshNameFromNapLodController(MonoBehaviour comp)
+        private static string ContainerId(string path)
+        {
+            var lowered = path.ToLowerInvariant();
+            var bytes = ArrayPool<byte>.Shared.Rent(System.Text.Encoding.UTF8.GetMaxByteCount(lowered.Length));
+            try
+            {
+                var written = System.Text.Encoding.UTF8.GetBytes(lowered, 0, lowered.Length, bytes, 0);
+                return K4os.Hash.xxHash.XXH64.DigestOf(bytes, 0, written).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(bytes);
+            }
+        }
+
+        /// <summary>
+        /// Extracts the LOD0 asset path out of a NapLodController. The component holds one path
+        /// per LOD level, highest detail first. Returns null when there is no usable path.
+        /// </summary>
+        private static string MeshPathFromNapLodController(MonoBehaviour comp)
         {
             var raw = comp.GetRawData();
             var path = raw != null ? System.Text.Encoding.UTF8.GetString(raw) : string.Empty;
@@ -1161,15 +1299,7 @@ namespace AnimeStudio
                 return null;
             }
 
-            trimmed = trimmed.Substring(0, meshIndex);
-
-            var lastSlash = trimmed.LastIndexOf('/');
-            if (lastSlash >= 0 && lastSlash < trimmed.Length - 1)
-            {
-                trimmed = trimmed.Substring(lastSlash + 1);
-            }
-
-            trimmed = trimmed.Trim();
+            trimmed = trimmed.Substring(0, meshIndex + ".mesh".Length).Trim();
             return string.IsNullOrEmpty(trimmed) ? null : trimmed;
         }
 

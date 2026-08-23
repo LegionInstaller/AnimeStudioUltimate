@@ -906,25 +906,28 @@ namespace AnimeStudio
 
                         var vertexFormat = MeshHelper.ToVertexFormat(m_Channel.format, version);
                         var componentByteSize = (int)MeshHelper.GetFormatSize(vertexFormat);
+                        // One vertex contributes `dimension` components that sit next to each
+                        // other both in the source stream (componentOffset advances by exactly
+                        // componentByteSize) and in the destination, so the whole run copies in
+                        // one go. Copying component by component meant tens of millions of
+                        // Buffer.BlockCopy calls of two to four bytes each on a real load.
                         var componentBytes = new byte[m_VertexCount * m_Channel.dimension * componentByteSize];
+                        var vertexBlockSize = m_Channel.dimension * componentByteSize;
+                        var source = m_VertexData.m_DataSize.AsSpan();
+                        var destination = componentBytes.AsSpan();
                         for (int v = 0; v < m_VertexCount; v++)
                         {
                             var vertexOffset = (int)m_Stream.offset + m_Channel.offset + (int)m_Stream.stride * v;
-                            for (int d = 0; d < m_Channel.dimension; d++)
-                            {
-                                var componentOffset = vertexOffset + componentByteSize * d;
-                                Buffer.BlockCopy(m_VertexData.m_DataSize, componentOffset, componentBytes, componentByteSize * (v * m_Channel.dimension + d), componentByteSize);
-                            }
+                            source.Slice(vertexOffset, vertexBlockSize).CopyTo(destination.Slice(v * vertexBlockSize, vertexBlockSize));
                         }
 
                         if (reader.Endian == EndianType.BigEndian && componentByteSize > 1) //swap bytes
                         {
                             for (var i = 0; i < componentBytes.Length / componentByteSize; i++)
                             {
-                                var buff = new byte[componentByteSize];
-                                Buffer.BlockCopy(componentBytes, i * componentByteSize, buff, 0, componentByteSize);
-                                buff = buff.Reverse().ToArray();
-                                Buffer.BlockCopy(buff, 0, componentBytes, i * componentByteSize, componentByteSize);
+                                // In place: the old version allocated a scratch array and ran
+                                // LINQ Reverse().ToArray() for every single component.
+                                componentBytes.AsSpan(i * componentByteSize, componentByteSize).Reverse();
                             }
                         }
 
@@ -1269,6 +1272,20 @@ namespace AnimeStudio
 
         private void GetTriangles()
         {
+            // The index lists grow to millions of entries on real meshes. Reserving the total
+            // index count up front removes nearly all of the repeated doubling; strips and
+            // quads emit more than one index each, so the list may still grow a little, and
+            // Capacity never truncates, so this cannot change the result.
+            long declared = 0;
+            foreach (var m_SubMesh in m_SubMeshes)
+            {
+                declared += m_SubMesh.indexCount;
+            }
+            if (declared > m_Indices.Capacity && declared <= int.MaxValue)
+            {
+                m_Indices.Capacity = (int)declared;
+            }
+
             foreach (var m_SubMesh in m_SubMeshes)
             {
                 var firstIndex = m_SubMesh.firstByte / 2;

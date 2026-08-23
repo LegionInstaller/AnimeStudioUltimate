@@ -52,6 +52,8 @@ namespace AnimeStudio
             74, 74, 208, 87, 104, 118
         };
 
+        private long blocksDataLength;
+
         public long TotalSize => 8 + m_Header.compressedBlocksInfoSize + m_BlocksInfo.Sum((BundleFile.StorageBlock x) => x.compressedSize);
 
         public MhyFile(FileReader reader, Mhy mhy)
@@ -77,6 +79,7 @@ namespace AnimeStudio
             ReadBlocksInfoAndDirectory(reader);
             using var blocksStream = CreateBlocksStream(reader.FullPath);
             ReadBlocks(reader, blocksStream);
+            blocksDataLength = blocksStream.Position;
             ReadFiles(blocksStream, reader.FullPath);
             {
                 long compressedTotal = 0;
@@ -287,6 +290,18 @@ namespace AnimeStudio
             Logger.Verbose($"Writing files from blocks stream...");
 
             fileList = new List<StreamFile>();
+            // Same zero-copy approach BundleFile.ReadFiles already uses: the decompressed
+            // blocks live in one buffer and every CAB is a contiguous slice of it, so a view
+            // avoids copying the whole bundle a second time (2.5 GB of memmove on a 3.4 GB
+            // ZZZ load). The buffer stays alive exactly as long as the views into it.
+            ArraySegment<byte> shared = default;
+            bool hasShared = blocksStream is MemoryStream memoryStream
+                             && memoryStream.TryGetBuffer(out shared)
+                             && shared.Array != null;
+            // The buffer is allocated for the full declared block sum, so its length says
+            // nothing about how much real data was actually written.
+            var available = blocksDataLength > 0 ? blocksDataLength : blocksStream.Length;
+
             for (int i = 0; i < m_DirectoryInfo.Count; i++)
             {
                 var node = m_DirectoryInfo[i];
@@ -299,12 +314,31 @@ namespace AnimeStudio
                     var extractPath = path + "_unpacked" + Path.DirectorySeparatorChar;
                     Directory.CreateDirectory(extractPath);
                     file.stream = new FileStream(extractPath + file.fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    blocksStream.Position = node.offset;
+                    blocksStream.CopyTo(file.stream, node.size);
+                    file.stream.Position = 0;
+                }
+                else if (hasShared
+                         && node.offset >= 0
+                         && node.offset <= int.MaxValue
+                         && node.size <= int.MaxValue
+                         && node.offset + node.size <= available
+                         && node.offset + node.size <= shared.Count)
+                {
+                    file.stream = new MemoryStream(
+                        shared.Array,
+                        shared.Offset + (int)node.offset,
+                        (int)node.size,
+                        writable: false,
+                        publiclyVisible: true);
                 }
                 else
+                {
                     file.stream = new MemoryStream((int)node.size);
-                blocksStream.Position = node.offset;
-                blocksStream.CopyTo(file.stream, node.size);
-                file.stream.Position = 0;
+                    blocksStream.Position = node.offset;
+                    blocksStream.CopyTo(file.stream, node.size);
+                    file.stream.Position = 0;
+                }
             }
         }
 

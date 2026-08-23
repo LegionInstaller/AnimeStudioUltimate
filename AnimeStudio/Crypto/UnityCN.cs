@@ -10,6 +10,7 @@ namespace AnimeStudio
         private const string ManjuuSignature = "#$manjuuunity*!@";
 
         private static ICryptoTransform Encryptor;
+        private static readonly object EncryptorLock = new object();
 
         public byte[] Index = new byte[0x10];
         public byte[] Sub = new byte[0x10];
@@ -103,7 +104,13 @@ namespace AnimeStudio
         {
             if (Encryptor != null)
             {
-                key = Encryptor.TransformFinalBlock(key, 0, key.Length);
+                // ICryptoTransform is not thread-safe and this one is shared process-wide.
+                // Bundles are now decrypted in parallel; the lock costs nothing because this
+                // runs twice per bundle header, not per byte.
+                lock (EncryptorLock)
+                {
+                    key = Encryptor.TransformFinalBlock(key, 0, key.Length);
+                }
                 for (int i = 0; i < 0x10; i++)
                     data[i] ^= key[i];
             }

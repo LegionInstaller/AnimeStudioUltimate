@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Collections.Generic;
@@ -159,7 +160,11 @@ namespace AnimeStudio
         public static string ConvertSerializedAnimationClip(AnimationClip animationClip)
         {
             var sb = new StringBuilder();
-            using (var stringWriter = new StringWriter(sb))
+            // Invariant, ausdruecklich: der FormatProvider dieses Writers bestimmt, wie
+            // Emitter.WriteFormatted jede Zahl schreibt. Ohne ihn erbt er die Kultur des
+            // Threads -- auf einem deutschen System stand dann ein Komma als Dezimaltrenner
+            // in jeder .anim, und in einem YAML-Flow-Mapping trennt das Komma die Elemente.
+            using (var stringWriter = new StringWriter(sb, CultureInfo.InvariantCulture))
             {
                 YAMLWriter writer = new YAMLWriter();
                 YAMLDocument doc = ExportYAMLDocument(animationClip);

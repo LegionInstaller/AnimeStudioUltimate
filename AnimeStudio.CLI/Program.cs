@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,6 +16,14 @@ namespace AnimeStudio.CLI
 
         public static void Run(Options o)
         {
+            // Every exported number has to read the same regardless of the machine. The GUI
+            // forces a culture on its export task; the CLI never did, so on a system with comma
+            // decimals every .anim and .obj came out with commas where YAML and OBJ expect dots
+            // -- in a YAML flow mapping the comma is the element separator, so those files did
+            // not parse at all. DefaultThreadCurrentCulture also covers threads created later.
+            CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+
             try
             {
                 var game = GameManager.GetGame(o.GameName);

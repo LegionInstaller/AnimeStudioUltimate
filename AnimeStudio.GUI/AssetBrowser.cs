@@ -496,6 +496,25 @@ namespace AnimeStudio.GUI
 
                 _sortedColumn.HeaderCell.SortGlyphDirection = _sortOrder = direction == ListSortDirection.Ascending ? SortOrder.Ascending : SortOrder.Descending;
 
+                // Sorting rebuilds the grid below, and a virtual DataGridView keeps its selection
+                // by row index, so every selected row would be dropped. Remember which assets are
+                // selected instead: Source plus PathID names exactly one, and survives both the
+                // reorder and the rebuild.
+                var selected = new HashSet<(string Source, long PathID)>();
+                foreach (DataGridViewRow row in assetDataGridView.SelectedRows)
+                {
+                    if (row.Index >= 0 && row.Index < _assetEntries.Count)
+                    {
+                        var entry = _assetEntries[row.Index];
+                        selected.Add((entry.Source, entry.PathID));
+                    }
+                }
+
+                var currentRow = assetDataGridView.CurrentCell?.RowIndex ?? -1;
+                (string Source, long PathID)? anchor = currentRow >= 0 && currentRow < _assetEntries.Count
+                    ? (_assetEntries[currentRow].Source, _assetEntries[currentRow].PathID)
+                    : null;
+
                 Func<AssetEntry, object> keySelector = e.ColumnIndex switch
                 {
                     0 => x => x.Name,
@@ -514,7 +533,58 @@ namespace AnimeStudio.GUI
 
                 assetDataGridView.Rows.Clear();
                 assetDataGridView.RowCount = _assetEntries.Count;
+                RestoreSelection(selected, anchor);
                 assetDataGridView.Refresh();
+            }
+        }
+
+        /// <summary>
+        /// Re-selects the given assets at whatever rows they occupy now, and puts the anchor back
+        /// under the cursor. One pass over the entries, so the cost does not grow with the size of
+        /// the selection.
+        /// </summary>
+        private void RestoreSelection(HashSet<(string Source, long PathID)> selected, (string Source, long PathID)? anchor)
+        {
+            if (selected.Count == 0 && anchor == null)
+            {
+                return;
+            }
+
+            var anchorRow = -1;
+            var rows = new List<int>(selected.Count);
+            for (int i = 0; i < _assetEntries.Count; i++)
+            {
+                var entry = _assetEntries[i];
+                var id = (entry.Source, entry.PathID);
+                if (anchor.HasValue && id == anchor.Value)
+                {
+                    anchorRow = i;
+                }
+                if (selected.Contains(id))
+                {
+                    rows.Add(i);
+                }
+            }
+
+            assetDataGridView.SuspendLayout();
+            try
+            {
+                // Assigning CurrentCell selects that row by itself and drops everything else, so
+                // it has to happen before the selection is applied rather than after. It also
+                // scrolls the row into view, which is what keeps the user near where they were.
+                if (anchorRow >= 0)
+                {
+                    assetDataGridView.CurrentCell = assetDataGridView.Rows[anchorRow].Cells[0];
+                }
+                assetDataGridView.ClearSelection();
+                foreach (var row in rows)
+                {
+                    assetDataGridView.Rows[row].Selected = true;
+                }
+            }
+            finally
+            {
+                assetDataGridView.ResumeLayout();
             }
         }
         private void AssetBrowser_FormClosing(object sender, FormClosingEventArgs e)

@@ -848,11 +848,17 @@ namespace AnimeStudio
     {
         public Dictionary<uint, string> m_TOS;
         public List<PPtr<AnimationClip>> m_AnimationClips;
+        /// <summary>
+        /// Layers, state machines, states, transitions and blend trees. Parsed all along but
+        /// discarded; kept now so the state graph can be inspected -- which state plays which
+        /// clip, and with what transition timing -- instead of only the flat clip list.
+        /// </summary>
+        public ControllerConstant m_Controller;
 
         public AnimatorController(ObjectReader reader) : base(reader)
         {
             var m_ControllerSize = reader.ReadUInt32();
-            var m_Controller = new ControllerConstant(reader);
+            m_Controller = new ControllerConstant(reader);
 
             int tosSize = reader.ReadInt32();
             m_TOS = new Dictionary<uint, string>();

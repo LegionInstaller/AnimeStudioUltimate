@@ -9,6 +9,7 @@ using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -78,8 +79,40 @@ namespace AnimeStudio.GUI
         #endregion
 
         //asset list sorting
+        /// <summary>
+        /// Product name and version for the window title. The version comes from
+        /// <c>UltimateVersion</c> in Directory.Build.props by way of the assembly's product
+        /// version, so bumping a release touches one line there and nothing here.
+        /// </summary>
+        /// <remarks>
+        /// Read from this assembly rather than from Application.ProductVersion, which reports
+        /// whichever assembly happens to be the entry point and so gives the wrong number when
+        /// the form is hosted by something else.
+        ///
+        /// Anything after a '+' is build metadata, normally the commit hash a source-linked
+        /// build appends. The project turns that off, and this trims it as well, because a
+        /// forty-character hash in a title bar crowds out the part the user came to read.
+        /// </remarks>
+        private static readonly string AppTitle = BuildAppTitle();
+
+        private static string BuildAppTitle()
+        {
+            var version = typeof(MainForm).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? typeof(MainForm).Assembly.GetName().Version?.ToString()
+                ?? "?";
+            var metadata = version.IndexOf('+');
+            if (metadata >= 0)
+            {
+                version = version.Substring(0, metadata);
+            }
+            return $"AnimeStudio Ultimate v{version}";
+        }
+
         private int sortColumn = -1;
         private bool reverseSort;
+        /// <summary>Set while a sort rebuilds the selection, so no preview is decoded per row.</summary>
+        private bool suppressSelectionPreview;
 
         //tree search
         private int nextGObject;
@@ -95,7 +128,7 @@ namespace AnimeStudio.GUI
             Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US");
             InitializeComponent();
             ApplyTheme();
-            Text = $"AnimeStudio v{System.Windows.Forms.Application.ProductVersion}";
+            Text = AppTitle;
             InitializeExportOptions();
             InitializeProgressBar();
             InitializeLogger();
@@ -520,7 +553,15 @@ namespace AnimeStudio.GUI
                 }
             }
 
-            Text = $"AnimeStudio v{System.Windows.Forms.Application.ProductVersion} - {productName} - {assetsManager.assetsFileList[0].unityVersion} - {assetsManager.assetsFileList[0].m_TargetPlatform}";
+            // Some ZZZ bundles carry a two-line revision string ("2019.4.40f1\n2"); a title bar
+            // renders nothing past the newline, so take the first line and show a clean version.
+            var unityVersion = assetsManager.assetsFileList[0].unityVersion;
+            var lineBreak = unityVersion.IndexOfAny(new[] { '\r', '\n' });
+            if (lineBreak >= 0)
+            {
+                unityVersion = unityVersion.Substring(0, lineBreak);
+            }
+            Text = $"{AppTitle} - {productName} - Unity {unityVersion} - {assetsManager.assetsFileList[0].m_TargetPlatform}";
 
             assetListView.VirtualListSize = visibleAssets.Count;
 
@@ -952,7 +993,24 @@ namespace AnimeStudio.GUI
                 reverseSort = !reverseSort;
             }
             sortColumn = e.Column;
+
+            // Sorting reorders rows and nothing else, so a selection has to survive it. The list
+            // is virtual, which means the control tracks selection by row index and every index
+            // moves; remember the assets themselves and look up their new rows afterwards.
+            var selected = new HashSet<AssetItem>();
+            foreach (int index in assetListView.SelectedIndices)
+            {
+                if (index >= 0 && index < visibleAssets.Count)
+                {
+                    selected.Add(visibleAssets[index]);
+                }
+            }
+            var anchor = ScrollAnchor();
+
             assetListView.BeginUpdate();
+            // Tearing the selection down and building it back up raises one event per row, and
+            // each would decode a preview. Sorting must not cost that, nor change what is shown.
+            suppressSelectionPreview = true;
             assetListView.SelectedIndices.Clear();
             if (sortColumn == 4) //FullSize
             {
@@ -981,11 +1039,73 @@ namespace AnimeStudio.GUI
                     return reverseSort ? bt.CompareTo(at) : at.CompareTo(bt);
                 });
             }
+            RestoreSelection(selected, anchor);
+            suppressSelectionPreview = false;
             assetListView.EndUpdate();
+        }
+
+        /// <summary>
+        /// The asset the view should stay parked on across a reorder: whatever has focus, or
+        /// failing that the row currently at the top.
+        /// </summary>
+        private AssetItem ScrollAnchor()
+        {
+            try
+            {
+                if (assetListView.FocusedItem is AssetItem focused)
+                {
+                    return focused;
+                }
+                return assetListView.TopItem as AssetItem;
+            }
+            catch (InvalidOperationException)
+            {
+                // TopItem is not always available on a virtual list; losing the anchor only
+                // costs the scroll position, so it is not worth failing the sort over.
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Re-selects <paramref name="selected"/> at their new rows and scrolls
+        /// <paramref name="anchor"/> back into view. One pass over the list, so the cost does
+        /// not grow with the size of the selection.
+        /// </summary>
+        private void RestoreSelection(HashSet<AssetItem> selected, AssetItem anchor)
+        {
+            if (selected.Count == 0 && anchor == null)
+            {
+                return;
+            }
+
+            var anchorIndex = -1;
+            var indices = assetListView.SelectedIndices;
+            for (int i = 0; i < visibleAssets.Count; i++)
+            {
+                var item = visibleAssets[i];
+                if (ReferenceEquals(item, anchor))
+                {
+                    anchorIndex = i;
+                }
+                if (selected.Contains(item))
+                {
+                    indices.Add(i);
+                }
+            }
+
+            if (anchorIndex >= 0)
+            {
+                assetListView.EnsureVisible(anchorIndex);
+            }
         }
 
         private void selectAsset(object sender, ListViewItemSelectionChangedEventArgs e)
         {
+            if (suppressSelectionPreview)
+            {
+                // A reorder is rebuilding the same selection; the shown asset has not changed.
+                return;
+            }
             previewPanel.BackgroundImage = Properties.Resources.preview;
             previewPanel.BackgroundImageLayout = ImageLayout.Center;
             previewPanel.ContextMenuStrip = null;
@@ -1777,7 +1897,7 @@ namespace AnimeStudio.GUI
 
         public void ResetForm()
         {
-            Text = $"AnimeStudio v{System.Windows.Forms.Application.ProductVersion}";
+            Text = AppTitle;
             assetsManager.Clear();
             assemblyLoader.Clear();
             exportableAssets.Clear();

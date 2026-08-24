@@ -1,7 +1,27 @@
 <Project>
+  <PropertyGroup>
+    <!--
+      The one place the AnimeStudio Ultimate version is set. Bump this line and nothing else:
+      it feeds Version/AssemblyVersion/FileVersion below, and the window title reads it back
+      through Application.ProductVersion.
+
+      The minor tracks the Ultimate milestone, which is what the repository tags count:
+      v1-stable-zzz, v2-facial, v3-stable-pre-perf, v4-perf, v5-export, and the mesh-link
+      work that follows them is the sixth.
+    -->
+    <UltimateVersion>1.6.0</UltimateVersion>
+
+    <!--
+      Keep the commit hash out of the informational version. The SDK appends "+<sha>" to it by
+      default, Application.ProductVersion returns that string, and it ended up in the window
+      title where it told the user nothing about which build they were running.
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AnimeStudio' Or '$(MSBuildProjectName)' == 'AnimeStudio.CLI' Or '$(MSBuildProjectName)' == 'AnimeStudio.GUI'">
-    <Version>1.1.0</Version>
-    <AssemblyVersion>1.1.0</AssemblyVersion>
-    <FileVersion>1.1.0</FileVersion>
+    <Version>$(UltimateVersion)</Version>
+    <AssemblyVersion>$(UltimateVersion)</AssemblyVersion>
+    <FileVersion>$(UltimateVersion)</FileVersion>
   </PropertyGroup>
 </Project>

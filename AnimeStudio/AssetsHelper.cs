@@ -677,6 +677,20 @@ namespace AnimeStudio
                                 asset.Name = objectReader.type.ToString();
                                 exportable = ClassIDType.Animator.CanExport();
                                 break;
+                            case ClassIDType.Avatar when ClassIDType.Avatar.CanParse():
+                                // An Animator's m_Avatar is almost always an external reference
+                                // into another CAB, and usually another .blk: without an entry of
+                                // its own the Avatar is unreachable from a minimal map, and a
+                                // model that needs it cannot be deoptimised.
+                                //
+                                // The entry carries Source and Offset like every other one, which
+                                // is what locates the containing block, so no separate dependency
+                                // record is needed. Only the name is read here -- a full Avatar
+                                // parse walks the whole skeleton, is the expensive part of the
+                                // asset, and throws on some ZZZ blocks.
+                                asset.Name = objectReader.ReadAlignedString();
+                                exportable = true;
+                                break;
                             case ClassIDType.MiHoYoBinData when ClassIDType.MiHoYoBinData.CanParse():
                                 var MiHoYoBinData = new MiHoYoBinData(objectReader);
                                 obj = MiHoYoBinData;

@@ -251,6 +251,24 @@ namespace AnimeStudio
         public int[] m_RootMotionSkeletonIndexArray;
         public bool m_UseNextLevelForRootMotionSkeleton;
 
+        /// <summary>
+        /// ZZZ ships two Avatar layouts. The common one ends AvatarConstant with an extra flag;
+        /// this one does not, and reading it there overruns the object by a byte. The alignment
+        /// that follows turns that byte into four, so the TOS count read next is nonsense and the
+        /// avatar dies later in HumanDescription.
+        /// </summary>
+        /// <remarks>
+        /// Established, not guessed: across the 58 Avatar objects in the ZZZ blocks that contain
+        /// TerrorBird, the serialized type hash separates the two groups exactly -- 56 carry the
+        /// flag, 2 do not, no overlap. Each avatar was classified by which end offset lets the
+        /// remainder parse as TOS plus HumanDescription and finish on the object's last byte.
+        /// Unknown hashes keep reading the flag, which is what every other ZZZ avatar needs.
+        /// </remarks>
+        private const string NoRootMotionSkeletonFlagHash = "06FC117CA6D965140CCC18CA840CC1A1";
+
+        private static bool HasUseNextLevelForRootMotionSkeleton(SerializedType type)
+            => type == null || !type.Match(NoRootMotionSkeletonFlagHash);
+
         public AvatarConstant(ObjectReader reader, bool isZZZ = false)
         {
             var version = reader.version;
@@ -282,7 +300,7 @@ namespace AnimeStudio
                 m_RootMotionSkeletonIndexArray = reader.ReadInt32Array();
             }
 
-            if (isZZZ)
+            if (isZZZ && HasUseNextLevelForRootMotionSkeleton(reader.serializedType))
             {
                 m_UseNextLevelForRootMotionSkeleton = reader.ReadBoolean();
             }

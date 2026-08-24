@@ -1416,11 +1416,37 @@ namespace AnimeStudio
         public uint m_Type;
         public uint m_Index;
 
-        public ValueConstant(ObjectReader reader)
+        /// <summary>
+        /// ZZZ ships two AnimatorController layouts. One of them still writes m_TypeID, the field
+        /// Unity dropped after 5.5, so each ValueConstant is 16 bytes rather than 12. Reading it
+        /// as 12 leaves the parser sitting inside m_Values; nothing complains there, and the
+        /// object only dies afterwards in m_DefaultValues, far from the cause.
+        /// </summary>
+        /// <remarks>
+        /// Established, not guessed: across the 64 AnimatorControllers in the ZZZ blocks that
+        /// contain TerrorBird, the serialized type hash separates the two exactly. All 37 of hash
+        /// 1D32692A... read only at 12 bytes and never at 16; all 27 of hash 9860551F... read at
+        /// 16. Each candidate width was accepted only if the table of contents that follows came
+        /// out as real strings and the clip list read inside the object. The one controller where
+        /// 12 bytes also "worked" produced an empty table of contents and no clips at all, which
+        /// is degenerating rather than parsing.
+        /// </remarks>
+        private const string TypeIDControllerHash = "9860551FBCD452140FD34D9A51C380DE";
+
+        private static bool HasTypeID(ObjectReader reader)
         {
             var version = reader.version;
+            if (version[0] < 5 || (version[0] == 5 && version[1] < 5)) //5.5 down
+            {
+                return true;
+            }
+            return reader.serializedType?.Match(TypeIDControllerHash) ?? false;
+        }
+
+        public ValueConstant(ObjectReader reader)
+        {
             m_ID = reader.ReadUInt32();
-            if (version[0] < 5 || (version[0] == 5 && version[1] < 5))//5.5 down
+            if (HasTypeID(reader))
             {
                 m_TypeID = reader.ReadUInt32();
             }

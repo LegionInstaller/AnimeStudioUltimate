@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -61,10 +61,18 @@ namespace AnimeStudio
         // Concurrent: PPtr resolution fills this lazily, and resolving a PPtr happens during
         // export from whatever thread is exporting -- Material JSON alone does it for every
         // referenced object. A plain Dictionary written from several threads corrupts.
-        internal ConcurrentDictionary<string, int> assetsFileIndexCache = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // A CAB name maps to every loaded file carrying it, not to one: ZZZ ships different
+        // files under the same name. PPtr picks among the candidates by container.
+        internal ConcurrentDictionary<string, int[]> assetsFileIndexCache = new ConcurrentDictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
         // Concurrent: ResourceReader opens and registers a resource stream lazily, and that
         // can now happen from several threads at once while ReadAssets parses files in parallel.
+        // Keyed by container + resource name. ZZZ names a .resS after its CAB, so two
+        // same-named CABs bring two same-named .resS; keying by name alone made every mesh
+        // and texture in the second container read the first container's bytes.
         internal ConcurrentDictionary<string, BinaryReader> resourceFileReaders = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
+        // Fallback for a resource referenced from another container. Holds the same reader
+        // instances as above, so it is cleared but never disposed separately.
+        internal ConcurrentDictionary<string, BinaryReader> resourceFileReadersByName = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
 
         internal List<string> importFiles = new List<string>();
         internal HashSet<string> importFilesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -173,7 +181,7 @@ namespace AnimeStudio
         private sealed class LoadBatch
         {
             public readonly List<SerializedFile> AssetsFiles = new List<SerializedFile>();
-            public readonly List<KeyValuePair<string, BinaryReader>> ResourceFiles = new List<KeyValuePair<string, BinaryReader>>();
+            public readonly List<(string Container, string Name, BinaryReader Reader)> ResourceFiles = new List<(string, string, BinaryReader)>();
             /// <summary>External files discovered while resolving dependencies, loaded in the next wave.</summary>
             public readonly List<string> Dependencies = new List<string>();
             /// <summary>CAB names seen inside this input file, so duplicates are still skipped locally.</summary>
@@ -281,28 +289,52 @@ namespace AnimeStudio
             }
         }
 
+        /// <summary>Same shape as <see cref="SerializedFile.ContainerKey"/>, for files not yet built.</summary>
+        internal static string SerializedFileContainerKey(string originalPath, long offset)
+            => string.Concat(originalPath ?? string.Empty, "\0",
+                offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        internal static string ResourceKey(string container, string name)
+            => string.Concat(container ?? string.Empty, "\0", name ?? string.Empty);
+
+        /// <summary>Records another loaded file under this CAB name, keeping earlier ones.</summary>
+        private void AddFileIndex(string name, int index)
+        {
+            assetsFileIndexCache.AddOrUpdate(name, _ => new[] { index }, (_, existing) =>
+            {
+                var grown = new int[existing.Length + 1];
+                Array.Copy(existing, grown, existing.Length);
+                grown[existing.Length] = index;
+                return grown;
+            });
+        }
+
         private void Merge(LoadBatch batch)
         {
             foreach (var assetsFile in batch.AssetsFiles)
             {
-                if (!assetsFileListHash.Add(assetsFile.fileName))
+                if (!assetsFileListHash.Add(assetsFile.UniqueKey))
                 {
-                    // Another input file already contributed this CAB. First one wins, same as
-                    // the serial loop did; release the duplicate stream instead of leaking it.
+                    // The same file from the same place, reached twice. A repeated CAB *name*
+                    // is not this case -- ZZZ ships different files under one name, and
+                    // dropping those loses every object they hold.
                     Logger.Info($"Skipping {assetsFile.originalPath} ({assetsFile.fileName})");
                     assetsFile.reader.Dispose();
                     continue;
                 }
                 assetsFileList.Add(assetsFile);
-                assetsFileIndexCache.TryAdd(assetsFile.fileName, assetsFileList.Count - 1);
+                AddFileIndex(assetsFile.fileName, assetsFileList.Count - 1);
             }
 
             foreach (var resource in batch.ResourceFiles)
             {
-                if (!resourceFileReaders.TryAdd(resource.Key, resource.Value))
+                if (!resourceFileReaders.TryAdd(ResourceKey(resource.Container, resource.Name), resource.Reader))
                 {
-                    resource.Value.Dispose();
+                    resource.Reader.Dispose();
+                    continue;
                 }
+                // First container to offer this name also answers lookups from elsewhere.
+                resourceFileReadersByName.TryAdd(resource.Name, resource.Reader);
             }
 
             foreach (var name in batch.RegisteredNames)
@@ -464,7 +496,7 @@ namespace AnimeStudio
                     Logger.Error($"Error while reading assets file {reader.FullPath} from {Path.GetFileName(originalPath)}", e);
                     // A file that failed to parse as a serialized file may still be a usable
                     // resource stream, so hand it to the merge instead of dropping it there.
-                    batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(reader.FileName, reader));
+                    batch.ResourceFiles.Add((SerializedFileContainerKey(originalPath, originalOffset), reader.FileName, reader));
                 }
             }
             else
@@ -499,7 +531,7 @@ namespace AnimeStudio
                             break;
                         case FileType.ResourceFile:
                             Logger.Verbose("Caching resource stream");
-                            batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(file.fileName, subReader));
+                            batch.ResourceFiles.Add((SerializedFileContainerKey(reader.FullPath, 0), file.fileName, subReader));
                             break;
                     }
                 }
@@ -592,7 +624,7 @@ namespace AnimeStudio
                             {
                                 entryReader.Position = 0;
                                 Logger.Verbose("Caching resource file");
-                                batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(entry.Name, entryReader));
+                                batch.ResourceFiles.Add((SerializedFileContainerKey(entryReader.FullPath, 0), entry.Name, entryReader));
                             }
                         }
                         catch (Exception e)
@@ -719,7 +751,7 @@ namespace AnimeStudio
                         Logger.Verbose("Caching resource stream");
                         // The merge disposes the loser on a name collision, so no stream is
                         // left without an owner.
-                        batch.ResourceFiles.Add(new KeyValuePair<string, BinaryReader>(innerFile.fileName, cabReader));
+                        batch.ResourceFiles.Add((SerializedFileContainerKey(originalPath ?? reader.FullPath, originalOffset), innerFile.fileName, cabReader));
                     }
                 }
             }
@@ -798,6 +830,7 @@ namespace AnimeStudio
                 resourceFileReader.Value.Close();
             }
             resourceFileReaders.Clear();
+            resourceFileReadersByName.Clear();
 
             assetsFileIndexCache.Clear();
             ModelLinkedAssets.Clear();

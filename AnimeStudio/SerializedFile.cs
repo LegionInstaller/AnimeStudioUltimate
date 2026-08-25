@@ -16,6 +16,19 @@ namespace AnimeStudio
         public string fullName;
         public string originalPath;
         public string fileName;
+
+        /// <summary>
+        /// What identifies this file when its CAB name does not. ZZZ ships different files
+        /// under the same CAB name in different containers, so the container it was read
+        /// from -- plus the bundle offset inside it -- is the only stable identity. For a
+        /// plain assets file on disk <see cref="originalPath"/> is null and
+        /// <see cref="fullName"/> is already unique.
+        /// </summary>
+        public string ContainerKey => string.Concat(originalPath ?? fullName ?? string.Empty, "\0",
+            offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        /// <summary>The container identity plus the CAB name: unique across a whole load.</summary>
+        public string UniqueKey => string.Concat(ContainerKey, "\0", fileName ?? string.Empty);
         public int[] version = { 0, 0, 0, 0 };
         public BuildType buildType;
         public List<Object> Objects;

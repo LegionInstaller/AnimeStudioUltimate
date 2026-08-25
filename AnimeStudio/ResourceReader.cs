@@ -42,7 +42,13 @@ namespace AnimeStudio
             if (needSearch)
             {
                 var resourceFileName = Path.GetFileName(path);
-                if (assetsFile.assetsManager.resourceFileReaders.TryGetValue(resourceFileName, out reader))
+                var manager = assetsFile.assetsManager;
+                // Prefer the stream that came from this file's own container. ZZZ names a
+                // .resS after its CAB, and two containers can ship the same name with
+                // different bytes -- taking either one would read plausible garbage.
+                if (manager.resourceFileReaders.TryGetValue(
+                        AssetsManager.ResourceKey(assetsFile.ContainerKey, resourceFileName), out reader)
+                    || manager.resourceFileReadersByName.TryGetValue(resourceFileName, out reader))
                 {
                     needSearch = false;
                     return reader;
@@ -67,14 +73,16 @@ namespace AnimeStudio
                     var opened = new BinaryReader(File.OpenRead(resourceFilePath));
                     // Another thread may have registered the same file first; use the winner
                     // so every caller shares one stream, and close the loser.
-                    if (assetsFile.assetsManager.resourceFileReaders.TryAdd(resourceFileName, opened))
+                    var key = AssetsManager.ResourceKey(assetsFile.ContainerKey, resourceFileName);
+                    if (manager.resourceFileReaders.TryAdd(key, opened))
                     {
                         reader = opened;
+                        manager.resourceFileReadersByName.TryAdd(resourceFileName, opened);
                     }
                     else
                     {
                         opened.Dispose();
-                        reader = assetsFile.assetsManager.resourceFileReaders[resourceFileName];
+                        reader = manager.resourceFileReaders[key];
                     }
                     needSearch = false;
                     return reader;

@@ -36,6 +36,34 @@ namespace AnimeStudio
             return node;
         }
 
+        /// <summary>
+        /// Chooses which loaded file a CAB name means. Several can carry the same name, so
+        /// the copy from the same container as the file holding the reference wins; with a
+        /// single candidate -- the overwhelmingly common case -- this is the old behaviour.
+        /// The candidate list is cached, never the choice: caching the choice let the first
+        /// PPtr to ask fix the answer for every other file.
+        /// </summary>
+        private static int Pick(int[] candidates, List<SerializedFile> files, SerializedFile from)
+        {
+            if (candidates.Length == 0)
+            {
+                return -1;
+            }
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+            var container = from.ContainerKey;
+            foreach (var candidate in candidates)
+            {
+                if (files[candidate].ContainerKey == container)
+                {
+                    return candidate;
+                }
+            }
+            return candidates[0];
+        }
+
         private bool TryGetAssetsFile(out SerializedFile result)
         {
             result = null;
@@ -55,11 +83,20 @@ namespace AnimeStudio
                 {
                     var m_External = assetsFile.m_Externals[m_FileID - 1];
                     var name = m_External.fileName;
-                    if (!assetsFileIndexCache.TryGetValue(name, out index))
+                    if (!assetsFileIndexCache.TryGetValue(name, out var candidates))
                     {
-                        index = assetsFileList.FindIndex(x => x.fileName.Equals(name, StringComparison.OrdinalIgnoreCase));
-                        assetsFileIndexCache.TryAdd(name, index);
+                        var found = new List<int>();
+                        for (var i = 0; i < assetsFileList.Count; i++)
+                        {
+                            if (assetsFileList[i].fileName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                found.Add(i);
+                            }
+                        }
+                        candidates = found.ToArray();
+                        assetsFileIndexCache.TryAdd(name, candidates);
                     }
+                    index = Pick(candidates, assetsFileList, assetsFile);
                 }
 
                 if (index >= 0)
@@ -111,7 +148,9 @@ namespace AnimeStudio
         public void Set(T m_Object)
         {
             var name = m_Object.assetsFile.fileName;
-            if (string.Equals(assetsFile.fileName, name, StringComparison.OrdinalIgnoreCase))
+            // Compare the files themselves, not their names: two loaded files can share a
+            // CAB name, and treating the other one as "this file" retargets the pointer.
+            if (ReferenceEquals(assetsFile, m_Object.assetsFile))
             {
                 m_FileID = 0;
             }
@@ -136,10 +175,10 @@ namespace AnimeStudio
             var assetsFileList = assetsManager.assetsFileList;
             var assetsFileIndexCache = assetsManager.assetsFileIndexCache;
 
-            if (!assetsFileIndexCache.TryGetValue(name, out index))
+            index = assetsFileList.IndexOf(m_Object.assetsFile);
+            if (index < 0)
             {
-                index = assetsFileList.FindIndex(x => x.fileName.Equals(name, StringComparison.OrdinalIgnoreCase));
-                assetsFileIndexCache.TryAdd(name, index);
+                index = -1;
             }
 
             m_PathID = m_Object.m_PathID;

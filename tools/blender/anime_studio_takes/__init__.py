@@ -8,11 +8,13 @@ it's up to user to reproduce them!"
 
 So after switching the armature to clip B the face keeps playing clip A. This add-on
 reproduces that setup: it groups the actions by take and assigns a whole take in one
-click. It only ever reassigns actions -- no keyframe or shape-key value is touched.
+click. It only ever reassigns actions and slots -- no keyframe or shape-key value is
+touched.
 
-Actions are found in three ways, so an unusual import still works:
-its assigned/NLA actions, the "<data-block>|<take>" names Blender's FBX importer writes,
-and -- as a fallback -- the data paths of the curves themselves.
+Actions are found in three ways, so an unusual import still works: what the data-block
+already carries, the "<data-block>|<take>" names Blender's FBX importer writes, and the
+data paths of the curves themselves. Both the one-action-per-data-block layout and the
+one-action-per-take-with-several-slots layout of Blender 4.4+ are handled.
 """
 
 import re
@@ -23,7 +25,7 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -35,12 +37,18 @@ bl_info = {
 # characters, which can cut that suffix off mid-word, so match any prefix of it.
 _LAYER_SUFFIX = re.compile(r"\|B(?:a(?:s(?:e(?: (?:L(?:a(?:y(?:e(?:r)?)?)?)?)?)?)?)?)?$")
 
+# Only paths naming a sub-element identify a data-block -- key_blocks["Fac_Jaw"].value or
+# pose.bones["Bip001"].location. A bare "location" resolves on every object.
+_SPECIFIC = '["'
+
+_RNA_TO_ID_TYPE = {"Object": 'OBJECT', "Key": 'KEY', "Material": 'MATERIAL'}
+
 # Dynamic enum items must stay referenced or Blender frees the strings mid-draw.
 _enum_cache = []
 
 
 # --------------------------------------------------------------------------------------
-# small compatibility helpers
+# actions, slots and channel bags across Blender versions
 
 
 def _curves(action):
@@ -56,20 +64,115 @@ def _curves(action):
     return out
 
 
-def _first_path(action):
-    for curve in _curves(action):
-        return curve.data_path
+def _slot_curves(action, slot):
+    """The f-curves that belong to one slot of a slotted action."""
+    for layer in getattr(action, "layers", ()):
+        for strip in layer.strips:
+            bag = None
+            try:
+                bag = strip.channelbag(slot)
+            except (TypeError, AttributeError):
+                handle = getattr(slot, "handle", None)
+                for candidate in getattr(strip, "channelbags", ()):
+                    if getattr(candidate, "slot_handle", None) == handle:
+                        bag = candidate
+                        break
+            if bag is not None:
+                return bag.fcurves
+    return ()
+
+
+def _id_type_of(data):
+    return getattr(data, "id_type", None) or _RNA_TO_ID_TYPE.get(data.bl_rna.identifier)
+
+
+def _channel_groups(action):
+    """[(slot_or_None, path)] -- one telling data path per slot of an action.
+
+    A slotted action can drive an armature and several shape-key data-blocks at once, so
+    each slot is looked at separately; a Blender 4.3 action has no slots and yields one.
+    """
+    slots = getattr(action, "slots", None)
+    groups = []
+    if slots:
+        for slot in slots:
+            for curve in _slot_curves(action, slot):
+                if _SPECIFIC in curve.data_path:
+                    groups.append((slot, curve.data_path))
+                    break
+    else:
+        for curve in _curves(action):
+            if _SPECIFIC in curve.data_path:
+                groups.append((None, curve.data_path))
+                break
+    return groups
+
+
+def _pick_slot(action, data, adt=None):
+    """The slot of `action` that drives `data`, or None if the action has none.
+
+    Never falls back to "the first slot": an OBJECT slot assigned to a shape-key
+    data-block raises "This slot is not suitable for this data-block type".
+    """
+    slots = getattr(action, "slots", None)
+    if not slots:
+        return None
+
+    if adt is not None and hasattr(adt, "action_suitable_slots"):
+        # Blender's own answer, once the action is assigned. Already type-filtered.
+        suitable = list(adt.action_suitable_slots)
+    else:
+        want = _id_type_of(data)
+        suitable = [s for s in slots if getattr(s, "target_id_type", None) == want]
+
+    if len(suitable) == 1:
+        return suitable[0]
+    if not suitable:
+        return None
+    # Several slots of the right type: the importer names them after the data-block.
+    for slot in suitable:
+        if getattr(slot, "name_display", None) == data.name:
+            return slot
+    # Otherwise let the curves decide which one addresses this data-block.
+    for slot in suitable:
+        for curve in _slot_curves(action, slot):
+            try:
+                data.path_resolve(curve.data_path)
+            except (ValueError, AttributeError, TypeError):
+                break
+            return slot
     return None
 
 
 def _assign(data, action):
+    """Assigns action (and on Blender 4.4+ a fitting slot). False if no slot fits."""
     if not data.animation_data:
         data.animation_data_create()
-    data.animation_data.action = action
-    # Blender 4.4+ needs the slot as well, or the action drives nothing.
-    slots = getattr(action, "slots", None)
-    if slots and hasattr(data.animation_data, "action_slot"):
-        data.animation_data.action_slot = slots[0]
+    adt = data.animation_data
+
+    if not getattr(action, "slots", None):
+        try:
+            adt.action = action                   # Blender 4.3 and earlier
+        except (RuntimeError, TypeError):
+            return False        # Blender refuses an action whose paths do not fit
+        return True
+
+    previous, previous_slot = adt.action, getattr(adt, "action_slot", None)
+    try:
+        adt.action = action
+    except (RuntimeError, TypeError):
+        return False
+    slot = _pick_slot(action, data, adt)
+    if slot is None:
+        adt.action = previous
+        if previous is not None and previous_slot is not None:
+            try:
+                adt.action_slot = previous_slot
+            except (RuntimeError, TypeError):
+                pass
+        return False
+    adt.action_slot = slot
+    return True
 
 
 # --------------------------------------------------------------------------------------
@@ -115,6 +218,52 @@ def _character_objects(obj):
     return list(objects)
 
 
+def _ownership():
+    """Which data-block each action in the file belongs to, as far as that is knowable.
+
+    Two characters imported side by side use the same channel and bone names, so the
+    structural fallback needs to know that an action is already spoken for.
+    """
+    owned = {}
+    by_name = {o.name: o for o in bpy.data.objects}
+    by_name.update({k.name: k for k in bpy.data.shape_keys})
+    unnamed = False
+    for action in bpy.data.actions:
+        owner, sep, _ = action.name.partition("|")
+        data = by_name.get(owner) if sep else None
+        if data is not None:
+            owned[action] = data
+        else:
+            unnamed = True
+    if unnamed:
+        # Only worth walking every data-block when some action's name says nothing.
+        for data in by_name.values():
+            adt = data.animation_data
+            if not adt:
+                continue
+            if adt.action:
+                owned.setdefault(adt.action, data)
+            for track in adt.nla_tracks:
+                for strip in track.strips:
+                    if strip.action:
+                        owned.setdefault(strip.action, data)
+    return owned
+
+
+def _take_of(action_name, owner_name):
+    rest = action_name
+    if rest.startswith(owner_name + "|"):
+        rest = rest[len(owner_name) + 1:]
+    else:
+        # Another data-block's name in front, e.g. an action found through its curves.
+        # An action named after the clip alone keeps its whole name.
+        owner, sep, tail = rest.partition("|")
+        if sep and (owner in bpy.data.objects or owner in bpy.data.shape_keys):
+            rest = tail
+    stripped = _LAYER_SUFFIX.sub("", rest)
+    return stripped or rest or action_name
+
+
 class Scan:
     """Everything the panel and the operators need about one character."""
 
@@ -129,7 +278,7 @@ class Scan:
         self.actions_total = len(bpy.data.actions)
         self.actions_matched = 0
         self.example = None     # an unmatched action name, for the diagnosis
-        self._pools = None
+        self._pool = None
         self._owned = {}
         if obj is None:
             return
@@ -150,7 +299,7 @@ class Scan:
         # Blender's FBX importer names actions "<data-block>|<take>[|<layer>]".
         by_owner = {}
         for action in bpy.data.actions:
-            owner, sep, rest = action.name.partition("|")
+            owner, sep, _rest = action.name.partition("|")
             if sep:
                 by_owner.setdefault(owner, []).append(action)
 
@@ -162,31 +311,16 @@ class Scan:
             if found:
                 self.per_id[data] = found
 
-        # Shape keys are the point of this add-on, so they always get the structural
-        # pass too -- a face whose second take is not encoded in the action name would
-        # otherwise stay stuck on the one action Blender happened to link.
-        for key in self.shape_keys:
-            self._merge(key, self._by_data_path(key))
-
-        if not self.per_id:
-            # Nothing matched at all: ask every data-block what its curves address.
-            for data in blocks:
-                self._merge(data, self._by_data_path(data))
-        else:
-            # Some data-blocks know fewer takes than others -- an armature whose actions
-            # were renamed, for instance. Let those ask as well.
-            best = max(len(found) for found in self.per_id.values())
-            for data in blocks:
-                if len(self.per_id.get(data, ())) < best:
-                    self._merge(data, self._by_data_path(data))
+        # And what the curves themselves address, for everything the names missed.
+        for data in blocks:
+            self._merge(data, self._by_data_path(data))
 
         self.actions_matched = len({a for f in self.per_id.values() for a in f.values()})
         if not self.per_id:
             for action in bpy.data.actions:
                 self.example = action.name
                 break
-
-        if self.per_id:
+        else:
             # The data-block with the shortest name loses the fewest characters to
             # truncation, so its take names are the most complete ones available.
             reference = min(self.per_id, key=lambda d: len(d.name))
@@ -211,31 +345,34 @@ class Scan:
         for action in actions:
             found.setdefault(_take_of(action.name, data.name), action)
 
-    def _pool(self, shape_keys):
-        """Actions worth testing, split by whether they drive shape keys.
+    def _channels(self):
+        """[(action, slot_or_None, path)] for every channel group in the file."""
+        if self._pool is None:
+            self._pool = [(action, slot, path)
+                          for action in bpy.data.actions
+                          for slot, path in _channel_groups(action)]
+        return self._pool
 
-        Only paths naming a sub-element are usable -- key_blocks["Fac_Jaw"].value or
-        pose.bones["Bip001"].location -- because a bare "location" resolves on every
-        object and would match anything.
-        """
-        if self._pools is None:
-            keyed, other = [], []
-            for action in bpy.data.actions:
-                path = _first_path(action)
-                if not path or '["' not in path:
-                    continue
-                (keyed if path.startswith("key_blocks[") else other).append((action, path))
-            self._pools = (keyed, other)
-        return self._pools[0 if shape_keys else 1]
+    def _allowed(self, action, data):
+        # A multi-slot action drives several data-blocks by design, so ownership says
+        # nothing about it. A single-slot one belongs to whoever already holds it.
+        if len(getattr(action, "slots", ()) or ()) > 1:
+            return True
+        owner = self._owned.get(action)
+        return owner is None or owner == data
 
     def _by_data_path(self, data):
         """Actions whose curves address something that exists on this data-block."""
+        want = _id_type_of(data)
         found = {}
-        for action, path in self._pool(isinstance(data, bpy.types.Key)):
-            # Another character's action can address the same channel or bone names,
-            # so never take one that already belongs to a different data-block.
-            owner = self._owned.get(action)
-            if owner is not None and owner != data:
+        for action, slot, path in self._channels():
+            # Cheap type filter first -- path_resolve on a mismatch costs an exception,
+            # and a character can have hundreds of data-blocks.
+            known = getattr(slot, "target_id_type", None) if slot is not None \
+                else ('KEY' if path.startswith("key_blocks[") else None)
+            if known is not None and known != want:
+                continue
+            if not self._allowed(action, data):
                 continue
             try:
                 data.path_resolve(path)
@@ -278,47 +415,6 @@ class Scan:
         return None, False
 
 
-def _ownership():
-    """Which data-block each action in the file belongs to, as far as that is knowable.
-
-    Two characters imported side by side use the same channel and bone names, so the
-    structural fallback needs to know that an action is already spoken for.
-    """
-    owned = {}
-    for action in bpy.data.actions:
-        owner, sep, _ = action.name.partition("|")
-        if not sep:
-            continue
-        data = bpy.data.objects.get(owner) or bpy.data.shape_keys.get(owner)
-        if data is not None:
-            owned[action] = data
-    for data in list(bpy.data.objects) + list(bpy.data.shape_keys):
-        adt = data.animation_data
-        if not adt:
-            continue
-        if adt.action:
-            owned.setdefault(adt.action, data)
-        for track in adt.nla_tracks:
-            for strip in track.strips:
-                if strip.action:
-                    owned.setdefault(strip.action, data)
-    return owned
-
-
-def _take_of(action_name, owner_name):
-    rest = action_name
-    if rest.startswith(owner_name + "|"):
-        rest = rest[len(owner_name) + 1:]
-    else:
-        # Another data-block's name in front, e.g. an action found through its curves.
-        # An action named after the clip alone keeps its whole name.
-        owner, sep, tail = rest.partition("|")
-        if sep and (owner in bpy.data.objects or owner in bpy.data.shape_keys):
-            rest = tail
-    stripped = _LAYER_SUFFIX.sub("", rest)
-    return stripped or rest or action_name
-
-
 # --------------------------------------------------------------------------------------
 # console API
 
@@ -339,23 +435,27 @@ def list_takes(obj=None):
 def set_take(take, obj=None):
     """Assigns one take to every animated data-block of one character.
 
-    Returns (assigned, guessed, missing).
+    Returns (assigned, guessed, missing, unslotted): how many data-blocks were switched,
+    which ones needed the frame range to identify the take, which ones have no action for
+    it, and which ones have one but no slot that fits them.
     """
     scan = Scan(obj or bpy.context.object)
     if isinstance(take, int):
         take = scan.takes[take]
 
-    assigned, missing, guessed = 0, [], []
+    assigned, missing, guessed, unslotted = 0, [], [], []
     for data in scan.per_id:
         action, was_guess = scan.action_for(data, take)
         if action is None:
             missing.append(data.name)
             continue
-        _assign(data, action)
+        if not _assign(data, action):
+            unslotted.append(data.name)
+            continue
         assigned += 1
         if was_guess:
             guessed.append(data.name)
-    return assigned, guessed, missing
+    return assigned, guessed, missing, unslotted
 
 
 def push_all_takes_to_nla(obj=None):
@@ -375,12 +475,14 @@ def push_all_takes_to_nla(obj=None):
             action, _ = scan.action_for(data, take)
             if action is None:
                 continue
+            slot = _pick_slot(action, data)
+            if slot is None and getattr(action, "slots", None):
+                continue                       # no slot fits this data-block
             track = adt.nla_tracks.new()
             track.name = take
             strip = track.strips.new(take, int(action.frame_range[0]), action)
-            slots = getattr(action, "slots", None)
-            if slots and hasattr(strip, "action_slot"):
-                strip.action_slot = slots[0]
+            if slot is not None and hasattr(strip, "action_slot"):
+                strip.action_slot = slot
             pushed += 1
     return pushed, len(scan.per_id)
 
@@ -436,15 +538,21 @@ class ANIMESTUDIO_OT_apply_take(bpy.types.Operator):
             index = (index + self.step) % len(scan.takes)
             context.scene.anime_studio_take = scan.takes[index]
 
-        assigned, guessed, missing = set_take(scan.takes[index], context.object)
+        assigned, guessed, missing, unslotted = set_take(scan.takes[index], context.object)
         msg = f"{scan.takes[index]}: {assigned} data-block(s)"
         if guessed:
-            msg += f"  (name truncated, matched by frame range: {', '.join(guessed)})"
+            msg += f"  (name truncated, matched by frame range: {_few(guessed)})"
         if missing:
-            msg += f"  (no action for: {', '.join(missing[:4])}"
-            msg += ", ...)" if len(missing) > 4 else ")"
-        self.report({'INFO'}, msg)
+            msg += f"  (no action for: {_few(missing)})"
+        if unslotted:
+            msg += f"  (no matching action slot for: {_few(unslotted)})"
+        self.report({'WARNING' if unslotted else 'INFO'}, msg)
         return {'FINISHED'}
+
+
+def _few(names, limit=4):
+    head = ", ".join(names[:limit])
+    return head + ", ..." if len(names) > limit else head
 
 
 class ANIMESTUDIO_OT_push_nla(bpy.types.Operator):

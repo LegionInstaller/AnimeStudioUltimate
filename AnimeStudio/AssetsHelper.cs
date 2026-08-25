@@ -26,13 +26,16 @@ namespace AnimeStudio
         // is always a varint continuation whose value would have to make BaseFolder 8703 bytes
         // long to spell "CABMAP". Non-matching files are rewound and read as V1.
         private static readonly byte[] CABMapMagic = { 0xFF, (byte)'C', (byte)'A', (byte)'B', (byte)'M', (byte)'A', (byte)'P' };
-        private const ushort CABMapVersion = 2;
+        private const ushort CABMapVersion = 3;
 
         public static bool Minimal = true;
         public static CancellationTokenSource tokenSource = new CancellationTokenSource();
 
         private static string BaseFolder = "";
-        private static Dictionary<string, Entry> CABMap = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+        // One CAB name, several locations: ZZZ ships different files under the same name in
+        // different containers, and keeping only the first made a block's own CABs invisible to
+        // FindCAB, so its dependencies were never walked.
+        private static Dictionary<string, List<Entry>> CABMap = new Dictionary<string, List<Entry>>(StringComparer.OrdinalIgnoreCase);
         // Keyed by file path — case-insensitive like CABMap, so a path that differs only in
         // casing cannot end up as two entries (which would load a file with a partial offset set).
         private static Dictionary<string, HashSet<long>> Offsets = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
@@ -92,13 +95,29 @@ namespace AnimeStudio
             return false;
         }
 
+        /// <summary>CAB names that exist in more than one container, seen during the last walk.</summary>
+        public static int AmbiguousCABs => ambiguous;
+        private static int ambiguous;
+
         public static void AddCABOffsetsFast(HashSet<string> paths, HashSet<string> cabs)
         {
             Queue<string> work = new Queue<string>(cabs);
             while (work.Count > 0)
             {
                 var cab = work.Dequeue();
-                if (CABMap.TryGetValue(cab, out var entry))
+                if (!CABMap.TryGetValue(cab, out var locations))
+                {
+                    continue;
+                }
+                if (locations.Count > 1)
+                {
+                    // The map cannot tell which copy a reference means -- it stores names, not
+                    // the referring file. Rather than pick one, take them all into the closure
+                    // and let PPtr decide at load time, where the referring file is known.
+                    ambiguous++;
+                    Logger.Verbose($"{cab} exists in {locations.Count} containers, adding all");
+                }
+                foreach (var entry in locations)
                 {
                     var fullPath = Path.Combine(BaseFolder, entry.Path);
                     Logger.Verbose($"Found {cab} in {fullPath}");
@@ -123,13 +142,16 @@ namespace AnimeStudio
         public static bool FindCAB(string path, out HashSet<string> cabs)
         {
             var relativePath = Path.GetRelativePath(BaseFolder, path);
-            cabs = CABMap.AsParallel().Where(x => x.Value.Path.Equals(relativePath, StringComparison.OrdinalIgnoreCase)).Select(x => x.Key).Distinct().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            cabs = CABMap.AsParallel()
+                .Where(x => x.Value.Any(e => e.Path.Equals(relativePath, StringComparison.OrdinalIgnoreCase)))
+                .Select(x => x.Key).Distinct().ToHashSet(StringComparer.OrdinalIgnoreCase);
             Logger.Verbose($"Found {cabs.Count} that belongs to {relativePath}");
             return cabs.Count != 0;
         }
 
         public static string[] ProcessFiles(string[] files_list)
         {
+            ambiguous = 0;
             HashSet<string> files = new HashSet<string>(files_list, StringComparer.OrdinalIgnoreCase);
             foreach (var file in files)
             {
@@ -141,6 +163,10 @@ namespace AnimeStudio
                 }
             }
             Logger.Verbose($"Finished resolving dependncies, the original {files.Count} files will be loaded entirely, and the {Offsets.Count - files.Count} dependicnes will be loaded from cached offsets only");
+            if (ambiguous > 0)
+            {
+                Logger.Info($"{ambiguous} CAB name(s) exist in more than one container; every copy was added rather than guessing one");
+            }
             return Offsets.Keys.ToArray();
         }
 
@@ -283,14 +309,19 @@ namespace AnimeStudio
 
                 if (CABMap.TryGetValue(assetsFile.fileName, out var existing))
                 {
-                    // Same CAB name in more than one container. First one wins; the discarded
-                    // location was silent before, which made a missing dependency impossible to
-                    // trace back to the map build.
-                    Logger.Verbose($"CAB collision: {assetsFile.fileName} already mapped to {existing.Path}, discarding copy in {entry.Path}");
+                    // Same CAB name in another container. Both are kept: they are usually
+                    // different files, and dropping one hid a whole block from FindCAB.
+                    if (existing.Any(e => e.Path.Equals(entry.Path, StringComparison.OrdinalIgnoreCase)
+                                          && e.Offset == entry.Offset))
+                    {
+                        continue;
+                    }
+                    Logger.Verbose($"CAB {assetsFile.fileName} also in {entry.Path}, keeping both");
                     collision++;
+                    existing.Add(entry);
                     continue;
                 }
-                CABMap.Add(assetsFile.fileName, entry);
+                CABMap.Add(assetsFile.fileName, new List<Entry> { entry });
             }
         }
 
@@ -312,12 +343,16 @@ namespace AnimeStudio
                 foreach (var kv in CABMap)
                 {
                     writer.Write(kv.Key);
-                    writer.Write(kv.Value.Path);
-                    writer.Write(kv.Value.Offset);
-                    writer.Write(kv.Value.Dependencies.Count);
-                    foreach (var cab in kv.Value.Dependencies)
+                    writer.Write(kv.Value.Count);
+                    foreach (var entry in kv.Value)
                     {
-                        writer.Write(cab);
+                        writer.Write(entry.Path);
+                        writer.Write(entry.Offset);
+                        writer.Write(entry.Dependencies.Count);
+                        foreach (var cab in entry.Dependencies)
+                        {
+                            writer.Write(cab);
+                        }
                     }
                 }
             }
@@ -426,23 +461,34 @@ namespace AnimeStudio
             for (int i = 0; i < count; i++)
             {
                 var cab = reader.ReadString();
-                var path = reader.ReadString();
-                var offset = reader.ReadInt64();
-                var depCount = reader.ReadInt32();
-                // Smallest possible dependency: 1 byte length prefix of an empty string.
-                ValidateCABMapCount(reader, "dependency count", depCount, 1);
-                var dependencies = new List<string>(depCount);
-                for (int j = 0; j < depCount; j++)
+                // V1 and V2 stored exactly one location per name and no count in front of it.
+                var locationCount = 1;
+                if (version >= 3)
                 {
-                    dependencies.Add(reader.ReadString());
+                    locationCount = reader.ReadInt32();
+                    ValidateCABMapCount(reader, "location count", locationCount, 13);
                 }
-                var entry = new Entry()
+                var locations = new List<Entry>(locationCount);
+                for (int l = 0; l < locationCount; l++)
                 {
-                    Path = path,
-                    Offset = offset,
-                    Dependencies = dependencies
-                };
-                CABMap.Add(cab, entry);
+                    var path = reader.ReadString();
+                    var offset = reader.ReadInt64();
+                    var depCount = reader.ReadInt32();
+                    // Smallest possible dependency: 1 byte length prefix of an empty string.
+                    ValidateCABMapCount(reader, "dependency count", depCount, 1);
+                    var dependencies = new List<string>(depCount);
+                    for (int j = 0; j < depCount; j++)
+                    {
+                        dependencies.Add(reader.ReadString());
+                    }
+                    locations.Add(new Entry
+                    {
+                        Path = path,
+                        Offset = offset,
+                        Dependencies = dependencies
+                    });
+                }
+                CABMap.Add(cab, locations);
             }
         } 
 

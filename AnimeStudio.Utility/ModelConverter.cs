@@ -23,6 +23,8 @@ namespace AnimeStudio
         private Dictionary<Texture2D, string> textureNameDictionary = new Dictionary<Texture2D, string>();
         private Dictionary<Transform, ImportedFrame> transformDictionary = new Dictionary<Transform, ImportedFrame>();
         Dictionary<uint, string> morphChannelNames = new Dictionary<uint, string>();
+        // Frame path of a renderer -> its own blend-shape channels, by attribute hash.
+        private Dictionary<string, Dictionary<uint, string>> morphChannelsByPath = new Dictionary<string, Dictionary<uint, string>>();
 
         public ModelConverter(GameObject m_GameObject, Options options, AnimationClip[] animationList = null)
         {
@@ -511,6 +513,14 @@ namespace AnimeStudio
                     MorphList.Add(morph);
                     morph.Path = iMesh.Path;
                     morph.Channels = new List<ImportedMorphChannel>(mesh.m_Shapes.channels.Count);
+                    // A renderer whose transform never made it into the frame tree has no
+                    // path to key the per-renderer map on; it still gets its channels.
+                    Dictionary<uint, string> pathChannels = null;
+                    if (morph.Path != null && !morphChannelsByPath.TryGetValue(morph.Path, out pathChannels))
+                    {
+                        pathChannels = new Dictionary<uint, string>();
+                        morphChannelsByPath[morph.Path] = pathChannels;
+                    }
                     for (int i = 0; i < mesh.m_Shapes.channels.Count; i++)
                     {
                         var channel = new ImportedMorphChannel();
@@ -526,6 +536,15 @@ namespace AnimeStudio
                         morphChannelNames[shapeChannel.nameHash] = shapeChannel.name;
 
                         channel.Name = shapeChannel.name.Split('.').Last();
+
+                        // The same map again, but per renderer. A binding names the renderer
+                        // it drives, so this resolves a channel on the mesh that actually
+                        // carries it -- two meshes may well use the same channel names.
+                        if (pathChannels != null)
+                        {
+                            pathChannels[crc.GetDigest()] = channel.Name;
+                            pathChannels[shapeChannel.nameHash] = channel.Name;
+                        }
                         channel.KeyframeList = new List<ImportedMorphKeyframe>(shapeChannel.frameCount);
                         var frameEnd = shapeChannel.frameIndex + shapeChannel.frameCount;
                         for (int frameIdx = shapeChannel.frameIndex; frameIdx < frameEnd; frameIdx++)
@@ -879,10 +898,16 @@ namespace AnimeStudio
                                 channelName = channelName.Substring(dotPos + 1);
                             }
 
-                            var path = GetPathByChannelName(channelName);
-                            if (string.IsNullOrEmpty(path))
+                            // Same rule as the generic bindings: the curve names its
+                            // renderer, so that link wins over matching by channel name.
+                            var path = FixBonePath(animationClip, m_FloatCurve.path);
+                            if (!MorphHasChannel(path, channelName))
                             {
-                                path = FixBonePath(animationClip, m_FloatCurve.path);
+                                var namedPath = GetPathByChannelName(channelName);
+                                if (!string.IsNullOrEmpty(namedPath))
+                                {
+                                    path = namedPath;
+                                }
                             }
                             var track = iAnim.FindTrack(path, channelName);
                             if (track.BlendShape == null)
@@ -984,22 +1009,34 @@ namespace AnimeStudio
             var binding = m_ClipBindingConstant.FindBinding(index);
             if (binding.typeID == ClassIDType.SkinnedMeshRenderer) //BlendShape
             {
-                var channelName = GetChannelNameFromHash(binding.attribute);
-                if (string.IsNullOrEmpty(channelName))
+                // The binding names the renderer it drives, so that link decides which mesh
+                // owns the channel. Matching by channel name is only a fallback: several
+                // meshes of one character can carry channels of the same name, and blend
+                // shapes are not limited to face meshes.
+                var path = FixBonePath(GetPathFromHash(binding.path));
+                string channelName = null;
+                if (!string.IsNullOrEmpty(path) && morphChannelsByPath.TryGetValue(path, out var boundChannels))
                 {
-                    curveIndex++;
-                    return;
+                    boundChannels.TryGetValue(binding.attribute, out channelName);
                 }
-                int dotPos = channelName.IndexOf('.');
-                if (dotPos >= 0)
+                if (channelName == null)
                 {
-                    channelName = channelName.Substring(dotPos + 1);
-                }
-
-                var path = GetPathByChannelName(channelName);
-                if (string.IsNullOrEmpty(path))
-                {
-                    path = FixBonePath(GetPathFromHash(binding.path));
+                    channelName = GetChannelNameFromHash(binding.attribute);
+                    if (string.IsNullOrEmpty(channelName))
+                    {
+                        curveIndex++;
+                        return;
+                    }
+                    int dotPos = channelName.IndexOf('.');
+                    if (dotPos >= 0)
+                    {
+                        channelName = channelName.Substring(dotPos + 1);
+                    }
+                    var namedPath = GetPathByChannelName(channelName);
+                    if (!string.IsNullOrEmpty(namedPath))
+                    {
+                        path = namedPath;
+                    }
                 }
                 var track = iAnim.FindTrack(path, channelName);
                 if (track.BlendShape == null)
@@ -1140,6 +1177,29 @@ namespace AnimeStudio
                 }
                 parentFrame.AddChild(frame);
             }
+        }
+
+        private bool MorphHasChannel(string path, string channelName)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+            foreach (var morph in MorphList)
+            {
+                if (morph.Path != path)
+                {
+                    continue;
+                }
+                foreach (var channel in morph.Channels)
+                {
+                    if (channel.Name == channelName)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private string GetPathByChannelName(string channelName)

@@ -25,7 +25,7 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 2, 0),
+    "version": (1, 3, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -320,12 +320,32 @@ class Scan:
             for action in bpy.data.actions:
                 self.example = action.name
                 break
-        else:
-            # The data-block with the shortest name loses the fewest characters to
-            # truncation, so its take names are the most complete ones available.
-            reference = min(self.per_id, key=lambda d: len(d.name))
-            self.takes = sorted(self.per_id[reference])
-            self.reference = self.per_id[reference]
+            return
+
+        # Every data-block contributes takes. A shape-key data-block that is animated in
+        # only one clip must not cut the list down to that clip.
+        #
+        # Blender <= 4.5 caps names at 63 characters, so one take can arrive under two
+        # spellings: the full one from a short data-block name, a cut-off one from a long
+        # one. Whether a shorter name is such a cut-off, or a take of its own, is decided
+        # by the data rather than by counting characters -- if any single data-block lists
+        # both spellings they must be two takes ("Walk" next to "Walk_Start"), and if none
+        # does, the short one is the long one truncated.
+        known = [set(found) for found in self.per_id.values()]
+        all_takes = set().union(*known)
+        takes = []
+        for take in sorted(all_takes, key=lambda t: (-len(t), t)):
+            if any(longer.startswith(take)
+                   and not any(take in one and longer in one for one in known)
+                   for longer in takes):
+                continue
+            takes.append(take)
+        self.takes = sorted(takes)
+        for take in self.takes:
+            for found in self.per_id.values():
+                if take in found:
+                    self.reference[take] = found[take]
+                    break
 
     def _merge(self, data, found):
         if not found:
@@ -436,8 +456,11 @@ def set_take(take, obj=None):
     """Assigns one take to every animated data-block of one character.
 
     Returns (assigned, guessed, missing, unslotted): how many data-blocks were switched,
-    which ones needed the frame range to identify the take, which ones have no action for
-    it, and which ones have one but no slot that fits them.
+    which ones needed the frame range to identify the take, which ones this take does not
+    animate, and which ones have an action but no slot that fits them.
+
+    A data-block the take does not animate has its action cleared, so the face cannot keep
+    playing the previous clip while the body moves to this one.
     """
     scan = Scan(obj or bpy.context.object)
     if isinstance(take, int):
@@ -447,6 +470,8 @@ def set_take(take, obj=None):
     for data in scan.per_id:
         action, was_guess = scan.action_for(data, take)
         if action is None:
+            if data.animation_data and data.animation_data.action:
+                data.animation_data.action = None
             missing.append(data.name)
             continue
         if not _assign(data, action):
@@ -543,7 +568,7 @@ class ANIMESTUDIO_OT_apply_take(bpy.types.Operator):
         if guessed:
             msg += f"  (name truncated, matched by frame range: {_few(guessed)})"
         if missing:
-            msg += f"  (no action for: {_few(missing)})"
+            msg += f"  (not animated in this take, cleared: {_few(missing)})"
         if unslotted:
             msg += f"  (no matching action slot for: {_few(unslotted)})"
         self.report({'WARNING' if unslotted else 'INFO'}, msg)

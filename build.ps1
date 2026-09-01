@@ -6,6 +6,27 @@ if ($LASTEXITCODE -ne 0) { throw "Patcher build failed" }
 $patcher = "AnimeStudio.Patcher\bin\Release\net10.0\AnimeStudio.Patcher.exe"
 if (-not (Test-Path $patcher)) { throw "Patcher not found at $patcher" }
 
+function Assert-Writable([string]$path) {
+    # The output is cleared before anything is copied into it, so a file another process
+    # holds open -- AnimeStudio itself, usually -- leaves a half-built dist behind that
+    # looks finished but is missing whatever came after the failure. Find out first.
+    if (-not (Test-Path $path)) { return }
+
+    $locked = @()
+    foreach ($file in Get-ChildItem $path -Recurse -File -Force -Include *.dll, *.exe) {
+        try {
+            $stream = [System.IO.File]::Open($file.FullName, 'Open', 'ReadWrite', 'None')
+            $stream.Dispose()
+        } catch {
+            $locked += $file.FullName
+        }
+    }
+    if ($locked.Count -gt 0) {
+        throw ("Cannot write to '$path' -- these are in use, close the application first:" +
+               [Environment]::NewLine + ($locked -join [Environment]::NewLine))
+    }
+}
+
 function Reset-Dir([string]$path) {
     if (Test-Path $path) {
         try {
@@ -41,6 +62,8 @@ foreach ($tfm in 'net9.0-windows', 'net10.0-windows') {
     # config
     $outputDir = ".\dist\$tfm"
     $configuration = 'Release'
+
+    Assert-Writable $outputDir
 
     # prepare paths
     $guiOut = "AnimeStudio.GUI/bin/$configuration/$tfm"

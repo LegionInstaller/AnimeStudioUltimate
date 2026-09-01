@@ -143,7 +143,8 @@ namespace AnimeStudio.GUI
             foreach (var part in mod.Parts)
             {
                 var (highest, distinct) = part.BoneRange(warnings);
-                var fits = MigotoSwap.Candidates(part, renderers, warnings);
+                var fits = MigotoSwap.Candidates(
+                    part, Path.GetFileNameWithoutExtension(mod.IniPath), renderers, warnings);
 
                 var row = new DataGridViewRow();
                 row.CreateCells(grid);

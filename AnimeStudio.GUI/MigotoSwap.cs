@@ -134,15 +134,57 @@ namespace AnimeStudio.GUI
         }
 
         /// <summary>
-        /// The renderers a part could sit on. A mod's BLENDINDICES address the target's
-        /// <c>m_Bones</c> directly, so anything with fewer bones than the part's highest
-        /// index is impossible, and the tightest fit is the likeliest.
+        /// The renderers a part could sit on, likeliest first.
+        ///
+        /// The bone count only rules candidates out: a mod's BLENDINDICES address the
+        /// target's <c>m_Bones</c> directly, so anything with fewer bones than the part's
+        /// highest index cannot be it. Ranking by the tightest fit alone is not enough --
+        /// with several characters loaded, a stranger with barely enough bones beats the
+        /// right renderer with a few to spare. The name decides instead: a part called
+        /// "RemielleBody" out of "Remielle.ini" shares two words with
+        /// "Remielle_Origin_Body_1" and only one with "Pyrois_Body_02".
         /// </summary>
         public static List<(string Name, int Bones)> Candidates(
-            MigotoPart part, List<(string Name, int Bones)> renderers, List<string> warnings)
+            MigotoPart part, string modName, List<(string Name, int Bones)> renderers,
+            List<string> warnings)
         {
             var (highest, _) = part.BoneRange(warnings);
-            return renderers.Where(r => r.Bones > highest).ToList();
+            var wanted = Tokens(part.Name);
+            wanted.UnionWith(Tokens(modName));
+            return renderers
+                .Where(r => r.Bones > highest)
+                .OrderByDescending(r => Tokens(r.Name).Count(wanted.Contains))
+                .ThenBy(r => r.Bones)
+                .ThenBy(r => r.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The words in a name, split on underscores and on the humps of camel case, so
+        /// "RemielleBody" and "Remielle_Origin_Body_1" have two in common. Pure numbers are
+        /// dropped -- a shared "01" says nothing.
+        /// </summary>
+        private static HashSet<string> Tokens(string name)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(name))
+                return set;
+            var word = new System.Text.StringBuilder();
+            void Flush()
+            {
+                if (word.Length > 1 && !word.ToString().All(char.IsDigit))
+                    set.Add(word.ToString());
+                word.Clear();
+            }
+            foreach (var c in name)
+            {
+                if (c == '_' || c == ' ' || c == '-' || c == '.') { Flush(); continue; }
+                if (char.IsUpper(c) && word.Length > 0 && !char.IsUpper(word[word.Length - 1]))
+                    Flush();
+                word.Append(c);
+            }
+            Flush();
+            return set;
         }
     }
 }

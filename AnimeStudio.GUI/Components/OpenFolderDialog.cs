@@ -14,18 +14,32 @@ namespace AnimeStudio.GUI
 
         internal DialogResult ShowDialog(IWin32Window owner = null)
         {
-            if (Environment.OSVersion.Version.Major >= 6)
+            // The shell dialog moves the process into whatever folder was picked unless it is
+            // told not to. Anything the program later resolves relatively -- the Maps folder,
+            // for one -- would then be looked for beside the user's choice instead of beside
+            // the executable. The flag says don't; the restore makes sure regardless.
+            var before = Environment.CurrentDirectory;
+            try
             {
-                return ShowVistaDialog(owner);
+                if (Environment.OSVersion.Version.Major >= 6)
+                {
+                    return ShowVistaDialog(owner);
+                }
+                return ShowFolderBrowserDialog(owner);
             }
-            return ShowFolderBrowserDialog(owner);
+            finally
+            {
+                if (!string.Equals(Environment.CurrentDirectory, before,
+                                   StringComparison.OrdinalIgnoreCase))
+                    Environment.CurrentDirectory = before;
+            }
         }
 
         private DialogResult ShowVistaDialog(IWin32Window owner)
         {
             var frm = (NativeMethods.IFileDialog)(new NativeMethods.FileOpenDialogRCW());
             frm.GetOptions(out var options);
-            options |= NativeMethods.FOS_PICKFOLDERS | NativeMethods.FOS_FORCEFILESYSTEM | NativeMethods.FOS_NOVALIDATE | NativeMethods.FOS_NOTESTFILECREATE | NativeMethods.FOS_DONTADDTORECENT;
+            options |= NativeMethods.FOS_PICKFOLDERS | NativeMethods.FOS_FORCEFILESYSTEM | NativeMethods.FOS_NOVALIDATE | NativeMethods.FOS_NOTESTFILECREATE | NativeMethods.FOS_DONTADDTORECENT | NativeMethods.FOS_NOCHANGEDIR;
             frm.SetOptions(options);
             if (!string.IsNullOrEmpty(Title))
             {
@@ -103,6 +117,7 @@ namespace AnimeStudio.GUI
 
         #region Constants  
 
+        public const uint FOS_NOCHANGEDIR = 0x00000008;
         public const uint FOS_PICKFOLDERS = 0x00000020;
         public const uint FOS_FORCEFILESYSTEM = 0x00000040;
         public const uint FOS_NOVALIDATE = 0x00000100;

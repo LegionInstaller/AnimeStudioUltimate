@@ -273,6 +273,24 @@ namespace AnimeStudio
             var mesh = GetMesh(meshR);
             if (mesh == null)
                 return;
+
+            // Something outside may want to put a different mesh on this renderer -- geometry
+            // from a 3DMigoto mod, say. It gets the renderer, the mesh it is replacing and the
+            // two lookups it cannot do for itself, and either answers with a finished mesh or
+            // declines.
+            var replacement = options.replaceMesh?.Invoke(new MeshReplacementContext
+            {
+                Renderer = meshR,
+                Original = mesh,
+                PathOf = GetTransformPath,
+                MaterialOf = index => ConvertMaterial(MaterialAt(meshR, index)).Name,
+            });
+            if (replacement != null)
+            {
+                MeshList.Add(replacement);
+                return;
+            }
+
             var iMesh = new ImportedMesh();
             meshR.m_GameObject.TryGet(out var m_GameObject2);
             iMesh.Path = GetTransformPath(m_GameObject2.m_Transform);
@@ -626,6 +644,16 @@ namespace AnimeStudio
             }
 
             return null;
+        }
+
+        /// <summary>The renderer's n-th material, clamped -- a replacement can have more
+        /// submeshes than the mesh it stands in for.</summary>
+        private Material MaterialAt(Renderer meshR, int index)
+        {
+            if (meshR.m_Materials == null || meshR.m_Materials.Count == 0)
+                return null;
+            var at = Math.Min(index, meshR.m_Materials.Count - 1);
+            return meshR.m_Materials[at].TryGet(out var mat) ? mat : null;
         }
 
         private string GetTransformPath(Transform transform)
@@ -1237,7 +1265,13 @@ namespace AnimeStudio
             public bool exportMaterials;
             public HashSet<Material> materials;
             public Dictionary<string, (bool, int)> uvs;
-            public Dictionary<string, int> texs; 
+            public Dictionary<string, int> texs;
+
+            /// <summary>
+            /// Offered a renderer before its mesh is converted; whatever it returns is used
+            /// instead. Null -- the normal case -- changes nothing at all.
+            /// </summary>
+            public Func<MeshReplacementContext, ImportedMesh> replaceMesh;
         }
     }
 }

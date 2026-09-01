@@ -461,6 +461,7 @@ namespace AnimeStudio.GUI
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
+                replaceMesh = MigotoSwap.Hook,
             };
             var convert = animationList != null
                 ? new ModelConverter(m_Animator, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
@@ -499,6 +500,7 @@ namespace AnimeStudio.GUI
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
+                replaceMesh = MigotoSwap.Hook,
             };
             var convert = animationList != null
                 ? new ModelConverter(gameObject, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
@@ -536,6 +538,7 @@ namespace AnimeStudio.GUI
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
+                replaceMesh = MigotoSwap.Hook,
             };
             var convert = animationList != null
                 ? new ModelConverter(rootName, gameObject, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
@@ -570,6 +573,8 @@ namespace AnimeStudio.GUI
                 fbxFormat = Properties.Settings.Default.fbxFormat
             };
             ModelExporter.ExportFbx(exportPath, convert, exportOptions);
+            // A replaced mesh without the mod's own textures exports as a grey shape.
+            MigotoSwap.CopyTextures(Path.GetDirectoryName(exportPath));
         }
 
         public static bool ExportDumpFile(AssetItem item, string exportPath)

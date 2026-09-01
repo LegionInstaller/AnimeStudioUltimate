@@ -13,6 +13,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\AnimeStudio.Utility\AnimeStudio.Utility.csproj" />
+    <ProjectReference Include="..\AnimeStudio.Migoto\AnimeStudio.Migoto.csproj" />
 		<ProjectReference Include="..\AnimeStudio\AnimeStudio.csproj" />
 	</ItemGroup>
 

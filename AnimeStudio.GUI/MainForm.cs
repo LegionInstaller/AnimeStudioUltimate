@@ -133,7 +133,24 @@ namespace AnimeStudio.GUI
             InitializeProgressBar();
             InitializeLogger();
             InitalizeOptions();
+            InitializeMigotoMenu();
             FMODinit();
+        }
+
+        /// <summary>
+        /// Adds the mesh-replacement entry to the Export menu. Done here rather than in the
+        /// designer file so the generated layout stays untouched.
+        /// </summary>
+        private void InitializeMigotoMenu()
+        {
+            var item = new ToolStripMenuItem("Replace meshes from a 3DMigoto mod...");
+            item.Click += (s, e) =>
+            {
+                using var form = new MigotoForm();
+                form.ShowDialog(this);
+            };
+            exportToolStripMenuItem.DropDownItems.Add(new ToolStripSeparator());
+            exportToolStripMenuItem.DropDownItems.Add(item);
         }
 
         private void ApplyTheme()
@@ -1660,6 +1677,7 @@ namespace AnimeStudio.GUI
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
+                replaceMesh = MigotoSwap.Hook,
             };
             var model = new ModelConverter(m_GameObject, options, Array.Empty<AnimationClip>());
             PreviewModel(model);
@@ -1675,6 +1693,7 @@ namespace AnimeStudio.GUI
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
+                replaceMesh = MigotoSwap.Hook,
             };
             var model = new ModelConverter(m_Animator, options, Array.Empty<AnimationClip>());
             PreviewModel(model);

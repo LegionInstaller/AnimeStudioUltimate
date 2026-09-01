@@ -15,6 +15,12 @@ Actions are found in three ways, so an unusual import still works: what the data
 already carries, the "<data-block>|<take>" names Blender's FBX importer writes, and the
 data paths of the curves themselves. Both the one-action-per-data-block layout and the
 one-action-per-take-with-several-slots layout of Blender 4.4+ are handled.
+
+ZZZ writes one take as up to three clips -- the body, the face, and one per outfit, each
+driven by its own layer of the AnimatorController. The list still shows every clip on its
+own; where such layers are found, "Combine Layered Clips" appears and plays the ticked
+ones together from stacked NLA tracks, which is the only way to run several actions on one
+data-block at once.
 """
 
 import re
@@ -25,7 +31,7 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -43,8 +49,13 @@ _SPECIFIC = '["'
 
 _RNA_TO_ID_TYPE = {"Object": 'OBJECT', "Key": 'KEY', "Material": 'MATERIAL'}
 
+# NLA tracks this add-on made carry this prefix, so a second click replaces them instead
+# of stacking a duplicate on top.
+_NLA_MARK = "AS| "
+
 # Dynamic enum items must stay referenced or Blender frees the strings mid-draw.
 _enum_cache = []
+_layer_cache = []
 
 
 # --------------------------------------------------------------------------------------
@@ -128,7 +139,11 @@ def _pick_slot(action, data, adt=None):
     if len(suitable) == 1:
         return suitable[0]
     if not suitable:
-        return None
+        # A slot Blender has not typed yet fits everything -- it takes its type from the
+        # first data-block it is bound to. Actions built by a script rather than by the
+        # FBX importer arrive that way, and refusing them would drop them silently.
+        untyped = [s for s in slots if getattr(s, "target_id_type", None) == 'UNSPECIFIED']
+        return untyped[0] if len(untyped) == 1 else None
     # Several slots of the right type: the importer names them after the data-block.
     for slot in suitable:
         if getattr(slot, "name_display", None) == data.name:
@@ -264,6 +279,63 @@ def _take_of(action_name, owner_name):
     return stripped or rest or action_name
 
 
+def _common_segments(takes):
+    """How many leading "_"-separated segments every take of one character shares."""
+    parts = [t.split("_") for t in takes]
+    shortest = min(len(p) for p in parts) - 1      # always leave one segment behind
+    n = 0
+    while n < shortest and all(p[n] == parts[0][n] for p in parts):
+        n += 1
+    return n
+
+
+def _variant_map(takes, frame_range_of):
+    """Groups takes that are the same clip exported once per animated layer.
+
+    ZZZ writes one take as up to three clips -- the body, the face, and one per outfit.
+    They differ by a single word sitting right behind the character name:
+
+        Avatar_..._Zhenzhen_Ani_Death            body
+        Avatar_..._Zhenzhen_Face_Ani_Death       face
+        Avatar_..._Zhenzhen_Default_Ani_Death    outfit
+
+    Everything in front of that word is common to every take of the character, so the
+    word is found by dropping the first segment behind the common prefix and looking for
+    another take that matches. Nothing is hardcoded, and the frame ranges have to agree.
+
+    That is deliberately strict enough to leave real takes alone: dropping the first
+    segment of "..._Ani_Attack_Normal_01_End" or "..._Ani_Attack_Normal_P2_01" does not
+    land on another take, so neither is folded into anything.
+
+    Returns (bases, variants): the takes to offer, and base -> [(word, take)].
+    """
+    if len(takes) < 2:
+        return list(takes), {}
+
+    n = _common_segments(takes)
+    tails = {t: t.split("_")[n:] for t in takes}
+    by_tail = {"_".join(segs): t for t, segs in tails.items()}
+
+    variants, folded = {}, set()
+    for take, segs in tails.items():
+        if len(segs) < 2:
+            continue
+        base = by_tail.get("_".join(segs[1:]))
+        if base is None or base == take:
+            continue
+        mine, theirs = frame_range_of(take), frame_range_of(base)
+        if mine is None or theirs is None:
+            continue
+        if abs(mine[0] - theirs[0]) > 1e-3 or abs(mine[1] - theirs[1]) > 1e-3:
+            continue
+        variants.setdefault(base, []).append((segs[0], take))
+        folded.add(take)
+
+    for group in variants.values():
+        group.sort()
+    return [t for t in takes if t not in folded], variants
+
+
 class Scan:
     """Everything the panel and the operators need about one character."""
 
@@ -274,6 +346,9 @@ class Scan:
         self.shape_keys = []
         self.per_id = {}        # data-block -> {take: action}
         self.takes = []
+        self.bases = []         # the body clip of every group, variants left out
+        self.variants = {}      # base take -> [(word, take)], e.g. ("Face", "..._Face_Ani_X")
+        self._base = {}         # variant take -> its base
         self.reference = {}     # take -> action of the least-truncated data-block
         self.actions_total = len(bpy.data.actions)
         self.actions_matched = 0
@@ -346,6 +421,31 @@ class Scan:
                 if take in found:
                     self.reference[take] = found[take]
                     break
+
+        self.bases, self.variants = _variant_map(
+            self.takes,
+            lambda t: self.reference[t].frame_range if t in self.reference else None)
+        self._base = {t: base for base, group in self.variants.items()
+                      for _, t in group}
+
+    def base_of(self, take):
+        """The body clip of the group `take` belongs to -- `take` itself if it is one."""
+        return self._base.get(take, take)
+
+    def group_of(self, take, words=None):
+        """The clips that play together: the body plus the variants named in `words`.
+
+        `words` of None means every variant that was found. Works from any member of the
+        group, so picking the face clip in the list and pressing Combine does the same as
+        picking the body clip.
+        """
+        base = self.base_of(take)
+        found = self.variants.get(base, ())
+        return [base] + [t for word, t in found if words is None or word in words]
+
+    def layer_words(self, take):
+        """The variant words of the group `take` belongs to, e.g. ["Default", "Face"]."""
+        return [word for word, _ in self.variants.get(self.base_of(take), ())]
 
     def _merge(self, data, found):
         if not found:
@@ -446,10 +546,12 @@ def list_takes(obj=None):
           f"{len(scan.per_id)} animated data-block(s)")
     for line in diagnose(scan):
         print("  " + line)
-    for i, take in enumerate(scan.takes):
+    for i, take in enumerate(scan.bases):
         covered = sum(1 for data in scan.per_id if scan.action_for(data, take)[0] is not None)
         print(f"  [{i}] {take}   ({covered}/{len(scan.per_id)} data-blocks)")
-    return scan.takes
+        for word, variant in scan.variants.get(take, ()):
+            print(f"        + {word:<12} {variant}")
+    return scan.bases
 
 
 def set_take(take, obj=None):
@@ -483,6 +585,78 @@ def set_take(take, obj=None):
     return assigned, guessed, missing, unslotted
 
 
+def _clear_our_tracks(adt, takes):
+    """Removes the NLA tracks a previous run of this add-on left behind.
+
+    Both spellings are dropped: the plain take names that "Push All Takes" writes and the
+    marked ones from the combined assignment, so the two features cannot end up
+    evaluating on top of each other.
+    """
+    stale = [t for t in adt.nla_tracks
+             if t.name.startswith(_NLA_MARK) or t.name in takes]
+    for track in stale:
+        adt.nla_tracks.remove(track)
+
+
+def set_take_combined(take, obj=None, words=None):
+    """Plays a take together with its variants -- body, face and outfit at once.
+
+    One data-block can hold only a single active action, so the variants go on stacked NLA
+    tracks instead. They animate largely disjoint channels, so the upper strip replaces
+    what it drives and everything else falls through to the strip below -- which is what
+    the layers of the original AnimatorController do.
+
+    The largest action goes to the bottom: the body carries the whole skeleton, the outfit
+    only its own bones, the face only eyes, teeth and its shape keys. Where two variants
+    do touch the same channel the smaller, more specific one then wins.
+
+    `words` picks which variants to include -- None takes every one that was found.
+
+    Returns (strips, blocks, missing): strips written, data-blocks touched, and the
+    data-blocks this take does not animate at all.
+    """
+    scan = Scan(obj or bpy.context.object)
+    if isinstance(take, int):
+        take = scan.bases[take]
+    group = scan.group_of(take, words)
+
+    strips, touched, missing = 0, 0, []
+    for data in scan.per_id:
+        if not data.animation_data:
+            data.animation_data_create()
+        adt = data.animation_data
+        adt.action = None
+        _clear_our_tracks(adt, scan.takes)
+
+        found = []
+        for take in group:
+            action, _ = scan.action_for(data, take)
+            if action is not None and action not in [a for _, a in found]:
+                found.append((take, action))
+        if not found:
+            missing.append(data.name)
+            continue
+        found.sort(key=lambda pair: -len(_curves(pair[1])))
+
+        wrote = False
+        for take, action in found:
+            slot = _pick_slot(action, data)
+            if slot is None and getattr(action, "slots", None):
+                continue                       # no slot of this action fits this data-block
+            track = adt.nla_tracks.new()
+            track.name = _NLA_MARK + take
+            strip = track.strips.new(take, int(action.frame_range[0]), action)
+            strip.blend_type = 'REPLACE'
+            strip.extrapolation = 'HOLD'
+            if slot is not None and hasattr(strip, "action_slot"):
+                strip.action_slot = slot
+            strips += 1
+            wrote = True
+        if wrote:
+            touched += 1
+    return strips, touched, missing
+
+
 def push_all_takes_to_nla(obj=None):
     """Puts every take on its own NLA track, so all of them stay visible at once."""
     scan = Scan(obj or bpy.context.object)
@@ -492,10 +666,7 @@ def push_all_takes_to_nla(obj=None):
             data.animation_data_create()
         adt = data.animation_data
         adt.action = None
-        # Drop only the tracks a previous run of this add-on made, so repeated clicks do
-        # not stack duplicates.
-        for track in [t for t in adt.nla_tracks if t.name in scan.takes]:
-            adt.nla_tracks.remove(track)
+        _clear_our_tracks(adt, scan.takes)
         for take in scan.takes:
             action, _ = scan.action_for(data, take)
             if action is None:
@@ -531,12 +702,38 @@ def diagnose(scan):
 
 
 def _take_items(self, context):
+    """Every clip, one entry each. Layered clips are marked, not folded away."""
     _enum_cache.clear()
-    for i, take in enumerate(Scan(context.object).takes):
-        _enum_cache.append((take, take, "", i))
+    scan = Scan(context.object)
+    for i, take in enumerate(scan.takes):
+        words = scan.layer_words(take)
+        note = "plays with " + ", ".join(words) if words else ""
+        _enum_cache.append((take, f"{take}  (+{len(words)})" if words else take, note, i))
     if not _enum_cache:
         _enum_cache.append(('NONE', "no takes found", "", 0))
     return _enum_cache
+
+
+def _layer_items(self, context):
+    """The variant words of the selected take, as toggles.
+
+    An ENUM_FLAG needs its values to be powers of two and stable while the buttons are on
+    screen, so they are handed out by position in the -- already sorted -- word list.
+    """
+    _layer_cache.clear()
+    take = getattr(context.scene, "anime_studio_take", "")
+    for i, word in enumerate(Scan(context.object).layer_words(take)):
+        _layer_cache.append((word, word, f"Include the {word} clip", 1 << i))
+    return _layer_cache
+
+
+def _select_all_layers(scene, context):
+    """Every layer of the newly picked take starts switched on."""
+    words = Scan(context.object).layer_words(scene.anime_studio_take)
+    try:
+        scene.anime_studio_layers = set(words)
+    except (TypeError, ValueError):
+        pass
 
 
 class ANIMESTUDIO_OT_apply_take(bpy.types.Operator):
@@ -562,9 +759,10 @@ class ANIMESTUDIO_OT_apply_take(bpy.types.Operator):
         if self.step:
             index = (index + self.step) % len(scan.takes)
             context.scene.anime_studio_take = scan.takes[index]
+        take = scan.takes[index]
 
-        assigned, guessed, missing, unslotted = set_take(scan.takes[index], context.object)
-        msg = f"{scan.takes[index]}: {assigned} data-block(s)"
+        assigned, guessed, missing, unslotted = set_take(take, context.object)
+        msg = f"{take}: {assigned} data-block(s)"
         if guessed:
             msg += f"  (name truncated, matched by frame range: {_few(guessed)})"
         if missing:
@@ -578,6 +776,40 @@ class ANIMESTUDIO_OT_apply_take(bpy.types.Operator):
 def _few(names, limit=4):
     head = ", ".join(names[:limit])
     return head + ", ..." if len(names) > limit else head
+
+
+class ANIMESTUDIO_OT_combine(bpy.types.Operator):
+    bl_idname = "anime_studio.combine"
+    bl_label = "Combine Layered Clips"
+    bl_description = ("Play the selected clip together with the ticked layers -- body, "
+                      "face and outfit -- from stacked NLA tracks")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        scan = Scan(context.object)
+        take = context.scene.anime_studio_take
+        if take not in scan.takes:
+            self.report({'WARNING'}, "No AnimeStudio takes found on this character")
+            return {'CANCELLED'}
+
+        words = set(context.scene.anime_studio_layers)
+        available = scan.layer_words(take)
+        if not available:
+            self.report({'WARNING'}, f"{take} has no layered clips to combine")
+            return {'CANCELLED'}
+
+        strips, blocks, missing = set_take_combined(take, context.object, words)
+        base = scan.base_of(take)
+        chosen = ", ".join(w for w in available if w in words) or "nothing extra"
+        msg = f"{base} + {chosen}: {strips} strip(s) on {blocks} data-block(s)"
+        if missing:
+            msg += f"  (not animated in this take: {_few(missing)})"
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
 
 
 class ANIMESTUDIO_OT_push_nla(bpy.types.Operator):
@@ -650,6 +882,16 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
                      text="Next", icon='TRIA_RIGHT').step = 1
         layout.operator(ANIMESTUDIO_OT_apply_take.bl_idname, icon='CHECKMARK').step = 0
 
+        # Only offered where the export really split the take across layers, so a character
+        # animated in one piece never sees this at all.
+        words = scan.layer_words(context.scene.anime_studio_take)
+        if words:
+            box = layout.box()
+            box.label(text="Layered clips for this take", icon='NLA')
+            box.label(text="body  (always included)")
+            box.prop(context.scene, "anime_studio_layers", expand=True)
+            box.operator(ANIMESTUDIO_OT_combine.bl_idname, icon='NLA_PUSHDOWN')
+
         layout.separator()
         layout.operator(ANIMESTUDIO_OT_push_nla.bl_idname, icon='NLA')
 
@@ -661,8 +903,8 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
             box.operator(ANIMESTUDIO_OT_report.bl_idname, icon='CONSOLE')
 
 
-_classes = (ANIMESTUDIO_OT_apply_take, ANIMESTUDIO_OT_push_nla, ANIMESTUDIO_OT_report,
-            ANIMESTUDIO_PT_takes)
+_classes = (ANIMESTUDIO_OT_apply_take, ANIMESTUDIO_OT_combine, ANIMESTUDIO_OT_push_nla,
+            ANIMESTUDIO_OT_report, ANIMESTUDIO_PT_takes)
 
 
 def register():
@@ -672,6 +914,13 @@ def register():
         name="Take",
         description="AnimationClip to put on the whole character",
         items=_take_items,
+        update=_select_all_layers,
+    )
+    bpy.types.Scene.anime_studio_layers = EnumProperty(
+        name="Layers",
+        description="Which of the layered clips of this take to play along with the body",
+        items=_layer_items,
+        options={'ENUM_FLAG'},
     )
     bpy.types.Scene.anime_studio_show_details = BoolProperty(
         name="Show details",
@@ -682,10 +931,12 @@ def register():
 
 def unregister():
     del bpy.types.Scene.anime_studio_show_details
+    del bpy.types.Scene.anime_studio_layers
     del bpy.types.Scene.anime_studio_take
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     _enum_cache.clear()
+    _layer_cache.clear()
 
 
 if __name__ == "__main__":

@@ -137,6 +137,9 @@ namespace AnimeStudio.GUI
             folderBox.Text = folder;
             renderers = MigotoSwap.LoadedRenderers();
             Fill();
+            // Once, here -- Describe() runs again on every Apply and would repeat them.
+            foreach (var w in warnings.Distinct())
+                Logger.Warning("Mesh replacement: " + w);
             Describe();
         }
 
@@ -270,8 +273,6 @@ namespace AnimeStudio.GUI
                 lines.AddRange(seen.Take(3));
                 if (seen.Count > 3)
                     lines.Add($"... and {seen.Count - 3} more, see the log");
-                foreach (var w in seen)
-                    Logger.Warning("Mesh replacement: " + w);
             }
             summary.Text = string.Join(Environment.NewLine, lines);
         }

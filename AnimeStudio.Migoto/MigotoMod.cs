@@ -12,14 +12,19 @@ namespace AnimeStudio.Migoto
         public int StartIndex { get; set; }
         public int BaseVertex { get; set; }
 
-        /// <summary>The <c>if</c> this draw sat inside, or null when it always runs.</summary>
-        public string Condition { get; set; }
+        /// <summary>What the enclosing <c>if</c> demanded. Empty when the draw always runs.</summary>
+        public List<IniCondition> Conditions { get; set; } = new List<IniCondition>();
 
-        public bool IsOptional => Condition != null;
+        public bool IsOptional => Conditions.Count > 0;
+
+        /// <summary>Whether this draw runs, given the values chosen for the mod's variables.</summary>
+        public bool Applies(IReadOnlyDictionary<string, string> chosen) =>
+            Conditions.All(c => c.Holds(chosen));
 
         public override string ToString() =>
             $"{IndexCount} indices from {StartIndex}"
-            + (Condition == null ? "" : $"  (only when {Condition})");
+            + (Conditions.Count == 0 ? ""
+               : "  (only when " + string.Join(" and ", Conditions.Select(c => c.ToString())) + ")");
     }
 
     /// <summary>An index buffer of one part, with the draws that use it.</summary>
@@ -109,8 +114,13 @@ namespace AnimeStudio.Migoto
         public List<MigotoPart> Parts { get; } = new List<MigotoPart>();
         public List<string> Warnings { get; } = new List<string>();
 
-        /// <summary>The <c>$Name</c> variables the ini toggles draws with.</summary>
-        public List<string> Switches { get; } = new List<string>();
+        /// <summary>The variables the mod switches its variants with, and their values.</summary>
+        public Dictionary<string, List<string>> Variables { get; private set; } =
+            new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The value each variable starts on -- the first one it offers.</summary>
+        public Dictionary<string, string> Defaults { get; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The image files the ini binds -- everything that is not a buffer.</summary>
         public List<string> Textures { get; } = new List<string>();
@@ -136,14 +146,9 @@ namespace AnimeStudio.Migoto
                     resources[section.Name] = section;
             }
 
-            foreach (var section in ini.Sections)
-            {
-                foreach (var entry in section.Entries)
-                {
-                    if (entry.Key.StartsWith("$") && !mod.Switches.Contains(entry.Key))
-                        mod.Switches.Add(entry.Key);
-                }
-            }
+            mod.Variables = ini.Variables;
+            foreach (var kv in ini.Variables)
+                mod.Defaults[kv.Key] = kv.Value.FirstOrDefault() ?? "0";
 
             foreach (var resource in resources.Values)
             {
@@ -315,7 +320,7 @@ namespace AnimeStudio.Migoto
                             IndexCount = Int(parts[0]),
                             StartIndex = Int(parts[1]),
                             BaseVertex = parts.Length > 2 ? Int(parts[2]) : 0,
-                            Condition = entry.Condition,
+                            Conditions = entry.Conditions,
                         });
                     }
                 }
@@ -350,16 +355,18 @@ namespace AnimeStudio.Migoto
 
                 foreach (var obj in part.Objects)
                 {
-                    var covered = obj.Draws.Sum(d => d.IndexCount);
                     if (obj.Draws.Count == 0 || !File.Exists(obj.IndexFile))
                         continue;
                     var size = new FileInfo(obj.IndexFile).Length;
                     var wide = obj.IndexFormat == null
                                || obj.IndexFormat.IndexOf("R32", StringComparison.OrdinalIgnoreCase) >= 0;
                     var available = (int)(size / (wide ? 4 : 2));
-                    if (covered > available)
-                        Warnings.Add($"{obj.Name}: draws {covered} indices but the buffer "
-                                     + $"holds {available}");
+                    // Each draw on its own, never their sum: the branches of an if exclude one
+                    // another, so adding them up always overshoots the buffer.
+                    var over = obj.Draws.Count(d => d.StartIndex + d.IndexCount > available);
+                    if (over > 0)
+                        Warnings.Add($"{obj.Name}: {over} draw(s) reach past the end of a "
+                                     + $"buffer holding {available} indices");
                 }
             }
             if (Parts.Count == 0)

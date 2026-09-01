@@ -23,7 +23,7 @@ namespace AnimeStudio.GUI
         private readonly TextBox folderBox = new TextBox();
         private readonly Button browse = new Button();
         private readonly DataGridView grid = new DataGridView();
-        private readonly CheckedListBox switches = new CheckedListBox();
+        private readonly DataGridView variables = new DataGridView();
         private readonly Label summary = new Label();
         private readonly Button apply = new Button();
         private readonly Button clear = new Button();
@@ -68,11 +68,17 @@ namespace AnimeStudio.GUI
             { Name = "target", HeaderText = "Replaces", FillWeight = 150, FlatStyle = FlatStyle.Flat });
 
             var switchLabel = new Label
-            { Text = "Optional parts", AutoSize = true, Left = 12, Top = 356 };
+            { Text = "Variants", AutoSize = true, Left = 12, Top = 356 };
             switchLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            switches.SetBounds(12, 374, 300, 80);
-            switches.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            switches.CheckOnClick = true;
+            variables.SetBounds(12, 374, 300, 80);
+            variables.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            variables.AllowUserToAddRows = false;
+            variables.AllowUserToDeleteRows = false;
+            variables.RowHeadersVisible = false;
+            variables.ColumnHeadersVisible = false;
+            variables.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            variables.Columns.Add(new DataGridViewTextBoxColumn { ReadOnly = true, FillWeight = 60 });
+            variables.Columns.Add(new DataGridViewComboBoxColumn { FillWeight = 40, FlatStyle = FlatStyle.Flat });
 
             summary.SetBounds(324, 374, 516, 80);
             summary.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
@@ -91,7 +97,7 @@ namespace AnimeStudio.GUI
 
             Controls.AddRange(new Control[]
             {
-                folderLabel, folderBox, browse, grid, switchLabel, switches, summary,
+                folderLabel, folderBox, browse, grid, switchLabel, variables, summary,
                 apply, clear, close,
             });
             Describe();
@@ -163,8 +169,12 @@ namespace AnimeStudio.GUI
                     // Only what could actually work is offered, so a wrong pick is hard to make.
                     foreach (var fit in fits)
                         cell.Items.Add($"{fit.Name}  ({fit.Bones} bones)");
-                    if (part.IsDrawn && highest >= 0 && fits.Count > 0)
-                        cell.Value = $"{fits[0].Name}  ({fits[0].Bones} bones)";   // tightest fit
+                    // Only preselect when the name actually points somewhere. With none of the
+                    // right character's renderers loaded, every candidate is a stranger that
+                    // merely has enough bones, and guessing one of those is how a mod ends up
+                    // on the wrong body.
+                    if (part.IsDrawn && highest >= 0 && fits.Count > 0 && fits[0].Shared > 0)
+                        cell.Value = $"{fits[0].Name}  ({fits[0].Bones} bones)";
                 }
                 catch (Exception ex)
                 {
@@ -177,9 +187,23 @@ namespace AnimeStudio.GUI
                 grid.Rows.Add(row);
             }
 
-            switches.Items.Clear();
-            foreach (var name in mod.Switches.Where(s => s != "$active"))
-                switches.Items.Add(name, true);
+            // One row per variable the mod switches with. A cycle variable such as
+            // "$body = 0,1,2" becomes a choice, an on/off one a 0/1 choice.
+            variables.Rows.Clear();
+            foreach (var kv in mod.Variables.OrderBy(v => v.Key, StringComparer.Ordinal))
+            {
+                if (kv.Key == "$active")
+                    continue;                       // the mod's own on switch, always on
+                var row = new DataGridViewRow();
+                row.CreateCells(variables);
+                row.Cells[0].Value = kv.Key;
+                var choice = (DataGridViewComboBoxCell)row.Cells[1];
+                foreach (var value in kv.Value)
+                    choice.Items.Add(value);
+                choice.Value = mod.Defaults.TryGetValue(kv.Key, out var d) && kv.Value.Contains(d)
+                    ? d : kv.Value.FirstOrDefault();
+                variables.Rows.Add(row);
+            }
         }
 
         private void Apply()
@@ -215,7 +239,13 @@ namespace AnimeStudio.GUI
                 return;
             }
 
-            MigotoSwap.Arm(mod, mapping, switches.CheckedItems.Cast<string>());
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["$active"] = "1",
+            };
+            foreach (DataGridViewRow row in variables.Rows)
+                values[(string)row.Cells[0].Value] = row.Cells[1].Value as string ?? "0";
+            MigotoSwap.Arm(mod, mapping, values);
             Logger.Info($"Mesh replacement armed: {mapping.Count} part(s) from "
                         + $"{Path.GetFileName(mod.Folder)}. The next model export uses them.");
             Describe();
@@ -224,6 +254,11 @@ namespace AnimeStudio.GUI
         private void Describe()
         {
             var lines = new List<string>();
+            if (mod != null && grid.Rows.Cast<DataGridViewRow>()
+                    .Any(r => r.Tag is MigotoPart p && p.IsDrawn
+                              && (r.Cells[3].Value as string) == NoTarget))
+                lines.Add("Some parts have no suggestion -- load the character they belong to, "
+                          + "or pick a target yourself.");
             lines.Add(MigotoSwap.IsArmed
                 ? $"Armed: {Path.GetFileName(MigotoSwap.Folder)}. The next model export "
                   + "replaces the assigned meshes."

@@ -22,11 +22,13 @@ namespace AnimeStudio.Migoto
         /// Builds the replacement. Returns null with a reason in <paramref name="warnings"/>
         /// when the part cannot stand in for this renderer -- never a half-built mesh.
         /// </summary>
-        /// <param name="include">
-        /// Decides the draws guarded by an <c>if</c> in the ini. Null takes all of them.
+        /// <param name="chosen">
+        /// The value picked for each of the mod's variables. Null takes every draw, which is
+        /// only right for a mod that has no variants.
         /// </param>
         public static ImportedMesh Build(MigotoPart part, MeshReplacementContext context,
-                                         List<string> warnings, Func<string, bool> include = null)
+                                         List<string> warnings,
+                                         IReadOnlyDictionary<string, string> chosen = null)
         {
             if (context.Renderer is not SkinnedMeshRenderer skinned)
             {
@@ -84,7 +86,7 @@ namespace AnimeStudio.Migoto
                 });
             }
 
-            BuildSubmeshes(part, mesh, vertices.Length, context, warnings, include);
+            BuildSubmeshes(part, mesh, vertices.Length, context, warnings, chosen);
             if (mesh.SubmeshList.Count == 0)
             {
                 warnings.Add($"{part.Name}: no draw call produced any triangle");
@@ -117,7 +119,7 @@ namespace AnimeStudio.Migoto
         /// </summary>
         private static void BuildSubmeshes(MigotoPart part, ImportedMesh mesh, int vertexCount,
                                            MeshReplacementContext context, List<string> warnings,
-                                           Func<string, bool> include)
+                                           IReadOnlyDictionary<string, string> chosen)
         {
             var material = 0;
             foreach (var obj in part.Objects)
@@ -130,7 +132,7 @@ namespace AnimeStudio.Migoto
 
                 foreach (var draw in obj.Draws)
                 {
-                    if (draw.Condition != null && include != null && !include(draw.Condition))
+                    if (chosen != null && !draw.Applies(chosen))
                         continue;
                     if (draw.IndexCount % 3 != 0)
                         warnings.Add($"{obj.Name}: a draw of {draw.IndexCount} indices is not "
@@ -201,29 +203,5 @@ namespace AnimeStudio.Migoto
             return list;
         }
 
-        /// <summary>
-        /// Reads a condition such as <c>$Garter == 1</c> against a set of switches the user
-        /// turned on. Anything it cannot parse is kept, because dropping geometry on a
-        /// misunderstanding is the worse mistake.
-        /// </summary>
-        public static Func<string, bool> Switches(IEnumerable<string> enabled)
-        {
-            var on = new HashSet<string>(enabled ?? Enumerable.Empty<string>(),
-                                         StringComparer.OrdinalIgnoreCase);
-            return condition =>
-            {
-                var parts = condition.Split(new[] { "==" }, StringSplitOptions.None);
-                if (parts.Length != 2)
-                    return true;
-                var name = parts[0].Trim();
-                var wanted = parts[1].Trim();
-                if (!name.StartsWith("$"))
-                    return true;
-                var isOn = on.Contains(name);
-                if (wanted == "1") return isOn;
-                if (wanted == "0") return !isOn;
-                return true;
-            };
-        }
     }
 }

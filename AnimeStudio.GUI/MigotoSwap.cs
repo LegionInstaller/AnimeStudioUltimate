@@ -17,7 +17,7 @@ namespace AnimeStudio.GUI
     {
         private static MigotoMod mod;
         private static Dictionary<string, MigotoPart> byRenderer;
-        private static Func<string, bool> include;
+        private static Dictionary<string, string> chosen;
 
         /// <summary>The armed mod folder, or null.</summary>
         public static string Folder => mod?.Folder;
@@ -31,11 +31,11 @@ namespace AnimeStudio.GUI
         public static List<string> Warnings { get; } = new List<string>();
 
         public static void Arm(MigotoMod loaded, Dictionary<string, MigotoPart> mapping,
-                               IEnumerable<string> switchesOn)
+                               Dictionary<string, string> variableValues)
         {
             mod = loaded;
             byRenderer = mapping;
-            include = MeshBuilder.Switches(switchesOn);
+            chosen = variableValues ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             LastSwapped.Clear();
             Warnings.Clear();
         }
@@ -44,7 +44,7 @@ namespace AnimeStudio.GUI
         {
             mod = null;
             byRenderer = null;
-            include = null;
+            chosen = null;
             LastSwapped.Clear();
             Warnings.Clear();
         }
@@ -64,7 +64,7 @@ namespace AnimeStudio.GUI
                 return null;
 
             var warnings = new List<string>();
-            var mesh = MeshBuilder.Build(part, context, warnings, include);
+            var mesh = MeshBuilder.Build(part, context, warnings, chosen);
             foreach (var w in warnings)
             {
                 Warnings.Add(w);
@@ -144,16 +144,35 @@ namespace AnimeStudio.GUI
         /// "RemielleBody" out of "Remielle.ini" shares two words with
         /// "Remielle_Origin_Body_1" and only one with "Pyrois_Body_02".
         /// </summary>
-        public static List<(string Name, int Bones)> Candidates(
+        public static List<(string Name, int Bones, int Shared)> Candidates(
             MigotoPart part, string modName, List<(string Name, int Bones)> renderers,
             List<string> warnings)
         {
             var (highest, _) = part.BoneRange(warnings);
             var wanted = Tokens(part.Name);
             wanted.UnionWith(Tokens(modName));
-            return renderers
-                .Where(r => r.Bones > highest)
-                .OrderByDescending(r => Tokens(r.Name).Count(wanted.Contains))
+
+            var fits = renderers.Where(r => r.Bones > highest).ToList();
+
+            // A shared word only means something if it is rare among the renderers that could
+            // actually take this part. Measured on a real library: for a body part of
+            // Remielle's, "Remielle" sits in 3 of 51 candidates and "Body" in 25 -- the first
+            // identifies, the second is what every body renderer is called. Counting inside
+            // the candidate set rather than over the whole library is what separates them,
+            // and it needs no list of generic words to maintain.
+            var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in fits)
+                foreach (var token in Tokens(r.Name))
+                    seen[token] = seen.TryGetValue(token, out var n) ? n + 1 : 1;
+
+            bool Informative(string token) =>
+                fits.Count < 4                       // too few to tell rare from common
+                || (seen.TryGetValue(token, out var n) && n * 4 < fits.Count);
+
+            return fits
+                .Select(r => (r.Name, r.Bones, Shared: Tokens(r.Name)
+                    .Count(t => wanted.Contains(t) && Informative(t))))
+                .OrderByDescending(r => r.Shared)
                 .ThenBy(r => r.Bones)
                 .ThenBy(r => r.Name, StringComparer.Ordinal)
                 .ToList();
@@ -179,8 +198,14 @@ namespace AnimeStudio.GUI
             foreach (var c in name)
             {
                 if (c == '_' || c == ' ' || c == '-' || c == '.') { Flush(); continue; }
-                if (char.IsUpper(c) && word.Length > 0 && !char.IsUpper(word[word.Length - 1]))
-                    Flush();
+                if (word.Length > 0)
+                {
+                    var last = word[word.Length - 1];
+                    // A new hump, or the point where a name turns into its number: "Jane1"
+                    // has to yield "Jane" so it can match "Jane_Body".
+                    if ((char.IsUpper(c) && !char.IsUpper(last)) || char.IsDigit(c) != char.IsDigit(last))
+                        Flush();
+                }
                 word.Append(c);
             }
             Flush();

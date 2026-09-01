@@ -142,24 +142,37 @@ namespace AnimeStudio.GUI
 
             foreach (var part in mod.Parts)
             {
-                var (highest, distinct) = part.BoneRange(warnings);
-                var fits = MigotoSwap.Candidates(
-                    part, Path.GetFileNameWithoutExtension(mod.IniPath), renderers, warnings);
-
                 var row = new DataGridViewRow();
                 row.CreateCells(grid);
-                row.Cells[0].Value = part.Name + (part.IsDrawn ? "" : "  (not drawn)");
-                row.Cells[1].Value = part.VertexCount;
-                row.Cells[2].Value = highest + 1;
-
                 var cell = (DataGridViewComboBoxCell)row.Cells[3];
-                // Only what could actually work is offered, so a wrong pick is hard to make.
                 cell.Items.Add(NoTarget);
-                foreach (var fit in fits)
-                    cell.Items.Add($"{fit.Name}  ({fit.Bones} bones)");
-                cell.Value = part.IsDrawn && fits.Count > 0
-                    ? $"{fits[0].Name}  ({fits[0].Bones} bones)"      // the tightest fit
-                    : NoTarget;
+                cell.Value = NoTarget;
+                row.Cells[0].Value = part.Name + (part.IsDrawn ? "" : "  (not drawn)");
+                row.Cells[1].Value = part.VertexCount > 0 ? (object)part.VertexCount : "?";
+
+                // One unreadable part must not take the whole dialog down with it. Folders are
+                // hand-edited and mods are written by several tool versions, so a part that
+                // cannot be made sense of is shown as such and the rest stays usable.
+                try
+                {
+                    var (highest, _) = part.BoneRange(warnings);
+                    row.Cells[2].Value = highest >= 0 ? (object)(highest + 1) : "?";
+
+                    var fits = MigotoSwap.Candidates(
+                        part, Path.GetFileNameWithoutExtension(mod.IniPath), renderers, warnings);
+                    // Only what could actually work is offered, so a wrong pick is hard to make.
+                    foreach (var fit in fits)
+                        cell.Items.Add($"{fit.Name}  ({fit.Bones} bones)");
+                    if (part.IsDrawn && highest >= 0 && fits.Count > 0)
+                        cell.Value = $"{fits[0].Name}  ({fits[0].Bones} bones)";   // tightest fit
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"{part.Name}: could not be read, {ex.Message}");
+                    row.Cells[2].Value = "?";
+                }
+                // An unreadable part keeps its row but stays on "(do not replace)", and Apply
+                // only looks at rows that name a target.
                 row.Tag = part;
                 grid.Rows.Add(row);
             }
@@ -215,10 +228,15 @@ namespace AnimeStudio.GUI
                 ? $"Armed: {Path.GetFileName(MigotoSwap.Folder)}. The next model export "
                   + "replaces the assigned meshes."
                 : "Nothing armed -- exports are unaffected.");
-            if (warnings.Count > 0)
+            var seen = warnings.Distinct().ToList();
+            if (seen.Count > 0)
             {
                 lines.Add("");
-                lines.AddRange(warnings.Distinct().Take(3));
+                lines.AddRange(seen.Take(3));
+                if (seen.Count > 3)
+                    lines.Add($"... and {seen.Count - 3} more, see the log");
+                foreach (var w in seen)
+                    Logger.Warning("Mesh replacement: " + w);
             }
             summary.Text = string.Join(Environment.NewLine, lines);
         }

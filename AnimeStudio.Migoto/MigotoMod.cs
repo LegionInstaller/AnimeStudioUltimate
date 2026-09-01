@@ -175,7 +175,9 @@ namespace AnimeStudio.Migoto
                 {
                     Name = stem,
                     PositionFile = Path.Combine(Folder, file),
-                    PositionStride = resource.GetInt("stride"),
+                    // Not every mod puts the stride on the resource; some only raise it on the
+                    // override. Both are consulted before giving up.
+                    PositionStride = Stride(resource, ini, stem),
                 };
 
                 var blend = FindByFile(resources, stem + "Blend.buf");
@@ -192,17 +194,60 @@ namespace AnimeStudio.Migoto
                 }
 
                 part.VertexCount = DeclaredVertexCount(ini, stem);
-                if (part.VertexCount <= 0 && part.PositionStride > 0
-                    && File.Exists(part.PositionFile))
-                {
-                    part.VertexCount = (int)(new FileInfo(part.PositionFile).Length
-                                             / part.PositionStride);
-                    Warnings.Add($"{stem}: no override_vertex_count in the ini, "
-                                 + $"took {part.VertexCount} from the file size");
-                }
+                if (part.VertexCount <= 0)
+                    part.VertexCount = FromFileSize(part, stem);
                 Parts.Add(part);
             }
             Parts.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+        }
+
+        /// <summary>
+        /// The stride of a buffer. Mods written by different tool versions put it in
+        /// different places, so both are tried before the part is given up on.
+        /// </summary>
+        private static int Stride(IniSection resource, ModIni ini, string stem)
+        {
+            var stride = resource.GetInt("stride");
+            if (stride > 0)
+                return stride;
+            foreach (var section in ini.Sections)
+            {
+                var raised = section.GetInt("override_byte_stride");
+                if (raised > 0 && section.Name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return raised;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// The vertex count derived from the file, when the ini does not state one. Says why
+        /// it failed rather than leaving the part with an impossible count.
+        /// </summary>
+        private int FromFileSize(MigotoPart part, string stem)
+        {
+            if (!File.Exists(part.PositionFile))
+            {
+                Warnings.Add($"{stem}: {Path.GetFileName(part.PositionFile)} is missing, "
+                             + "the part is unusable");
+                return -1;
+            }
+            if (part.PositionStride <= 0)
+            {
+                Warnings.Add($"{stem}: neither the ini nor the resource gives a stride for "
+                             + "the position buffer, the part is unusable");
+                return -1;
+            }
+            var size = new FileInfo(part.PositionFile).Length;
+            var count = (int)(size / part.PositionStride);
+            if (count <= 0)
+            {
+                Warnings.Add($"{stem}: {Path.GetFileName(part.PositionFile)} holds {size} "
+                             + $"bytes, too little for stride {part.PositionStride}");
+                return -1;
+            }
+            Warnings.Add($"{stem}: no override_vertex_count in the ini, took {count} from "
+                         + "the file size");
+            return count;
         }
 
         /// <summary>

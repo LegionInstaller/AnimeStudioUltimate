@@ -42,6 +42,16 @@ namespace AnimeStudio.Migoto
                                           string texcoordFile, int texcoordStride,
                                           int vertexCount, List<string> warnings)
         {
+            // A part whose vertex count could not be worked out arrives here as -1. Building
+            // an array of that length throws an overflow rather than anything readable, so it
+            // is stopped with a reason instead.
+            if (vertexCount <= 0)
+            {
+                warnings.Add($"{System.IO.Path.GetFileName(positionFile ?? "?")}: "
+                             + "the vertex count is unknown, the part cannot be read");
+                return Array.Empty<MigotoVertex>();
+            }
+
             var vertices = new MigotoVertex[vertexCount];
 
             ReadPositions(positionFile, positionStride, vertices, warnings);

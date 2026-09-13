@@ -12,7 +12,13 @@ What's different from upstream:
 - Blender add-on in `tools/blender/anime_studio_takes`: switch whole takes (armature + shape keys) at once, play body/face/outfit clips together, remove root motion.
 - Various loader, map and exporter fixes.
 
-Notes and test reports are in [`docs/`](docs) (in German).
+More detail in [`docs/`](docs):
+[ZZZ animations](docs/zzz-animations.md),
+[3DMigoto mesh replacement](docs/migoto-mesh-replacement.md),
+[Blender add-on](docs/blender-addon.md),
+[ZZZ animator controllers](docs/zzz-animator-controllers.md),
+[loader fixes](docs/loader-fixes.md),
+[performance](docs/performance.md).
 
 Not affiliated with HoYoverse. The repository contains no game assets.
 

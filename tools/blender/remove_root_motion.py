@@ -1,34 +1,34 @@
-"""Nimmt die Wanderung aus einer ZZZ-Animation, ohne die Figur zu zerlegen.
+"""Takes the travel out of a ZZZ animation without pulling the figure apart.
 
-Benutzung in Blender: Armature auswaehlen, dieses Skript im Text-Editor oeffnen, Run.
-Es wirkt auf die aktive Action; fuer alle Actions ALL_ACTIONS = True setzen.
+Usage in Blender: select the armature, open this script in the Text Editor, Run.
+It works on the active action; set ALL_ACTIONS = True to do every action.
 
-Warum ueber das Objekt und nicht ueber die Knochenkurven
---------------------------------------------------------
-Naheliegend waere, die location-Kurven des tragenden Knochens zu loeschen. Das geht bei
-diesen Rigs schief. Gemessen an Remielles Beach-Run:
+Why the object and not the bone curves
+--------------------------------------
+The obvious fix would be to delete the location curves of the carrier bone. That goes
+wrong on these rigs. Measured on Remielle's beach run:
 
-* Unter der Armature-Wurzel `Bone_Root` haengen **neun** Knochen nebeneinander: `Bip001`
-  und acht Floater. Sie wandern alle gemeinsam 0.0454 Einheiten.
-* Loescht man nur `Bip001`, bleibt die Huefte stehen und die Floater fliegen weiter.
-* Zieht man `Bip001`s Kurve von den anderen ab, stimmt es auch nicht: jeder Knochen hat
-  seine eigene Ruheorientierung, dieselbe Weltbewegung steckt bei jedem in anderen lokalen
-  Achsen. `Bip001` traegt sie auf lokal x (4.54), ein Floater verteilt auf x (3.07) und
-  y (3.34) -- beide ergeben dieselben 0.0454 in der Welt.
+* Under the armature root `Bone_Root` there are nine bones side by side: `Bip001`
+  and eight floaters. They all travel the same 0.0454 units.
+* Delete only `Bip001` and the hips stay put while the floaters keep going.
+* Subtracting `Bip001`'s curve from the others doesn't work either: every bone has its
+  own rest orientation, so the same world movement lands on different local axes.
+  `Bip001` carries it on local x (4.54), a floater splits it over x (3.07) and
+  y (3.34). Both come out as the same 0.0454 in world space.
 
-Die Gegenbewegung auf dem **Objekt** umgeht das ganze Problem: sie verschiebt alles
-gemeinsam. Nachgemessen bleibt der Abstand Huefte<->Floater auf fuenf Stellen gleich.
+Countering on the object avoids all of that, because it moves everything together.
+Measured afterwards, the hip to floater distance stays the same to five digits.
 """
 
 import bpy
 
-ROOT_BONE = "Bip001"      # traegt die Figur; None = automatisch suchen
-FLATTEN = (0, 1)          # Welt-X und -Y neutralisieren. Z bleibt, sonst fallen Spruenge flach
-ALL_ACTIONS = False       # True: jede Action der Armature nacheinander
+ROOT_BONE = "Bip001"      # carries the figure; None = search for it
+FLATTEN = (0, 1)          # hold world X and Y. Z stays, otherwise jumps go flat
+ALL_ACTIONS = False       # True: every action of the armature, one after another
 
 
 def _root_bone(arm):
-    """Der Knochen, der am weitesten wandert -- das ist der, der die Figur traegt."""
+    """The bone that travels furthest, which is the one carrying the figure."""
     if ROOT_BONE and ROOT_BONE in arm.pose.bones:
         return ROOT_BONE
     scene = bpy.context.scene
@@ -55,10 +55,10 @@ def remove_root_motion(arm, action):
     scene.frame_start, scene.frame_end = first, last
     bone = _root_bone(arm)
     if bone is None:
-        print("kein tragender Knochen gefunden")
+        print("no carrier bone found")
         return
 
-    # Erst den Weg messen, dann gegensteuern -- waehrend des Setzens waere er verfaelscht.
+    # Measure the path first, then counter it. Keying while measuring would skew it.
     path = {}
     for f in range(first, last + 1):
         scene.frame_set(f)
@@ -72,14 +72,14 @@ def remove_root_motion(arm, action):
         arm.keyframe_insert("location", frame=f)
 
     moved = (path[last] - start).length
-    print(f"{action.name}: {moved:.4f} Einheiten Wanderung von '{bone}' aufgehoben "
-          f"({last - first + 1} Frames)")
+    print(f"{action.name}: removed {moved:.4f} units of travel from '{bone}' "
+          f"({last - first + 1} frames)")
 
 
 def main():
     arm = bpy.context.object
     if arm is None or arm.type != 'ARMATURE':
-        print("bitte die Armature auswaehlen")
+        print("select the armature first")
         return
     actions = [arm.animation_data.action] if not ALL_ACTIONS else list(bpy.data.actions)
     for action in actions:

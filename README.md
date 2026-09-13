@@ -2,15 +2,17 @@
 
 A fork of [Escartem/AnimeStudio](https://github.com/Escartem/AnimeStudio) focused on **Zenless Zone Zero**, based on upstream master `1ccfbc1` (2026-08-12). Everything below the line is the original upstream README.
 
-What this fork adds:
+Download: see [Releases](../../releases) (GUI + CLI for .NET 9 and .NET 10, plus the Blender add-on).
 
-- **ZZZ ACL animations decode.** The ACL 2.1.0 tree with the HoYo patch from upstream's `feat/acl_fix` branch, including the database-backed scalar tracks that drive facial blend shapes.
-- **Faster animation export.** Track and bone-path lookups no longer scan per keyframe; heavy clips convert up to ~44× faster, with output checked to be identical.
-- **3DMigoto / ZZMI mesh replacement.** Export a loaded character with a mod's geometry and textures in place of the original meshes. It only reads mod folders from disk — nothing is injected into a running game.
-- **Blender add-on** in `tools/blender/anime_studio_takes`: switch takes across armature and shape keys, combine layered body/face/outfit clips, remove root motion.
-- Assorted loader, map and exporter fixes.
+What's different from upstream:
 
-Technical notes and test reports are in [`docs/`](docs) (German).
+- ZZZ ACL animations actually decode. Uses the ACL 2.1.0 tree with the HoYo patch from upstream's `feat/acl_fix` branch, including the database scalar tracks, so facial blend shapes work too.
+- Animation export is a lot faster on big clips (up to ~44x), same output as before.
+- 3DMigoto / ZZMI mesh replacement: export a character with a mod's meshes and textures instead of the original ones. It just reads the mod folder from disk, nothing gets injected into the game.
+- Blender add-on in `tools/blender/anime_studio_takes`: switch whole takes (armature + shape keys) at once, play body/face/outfit clips together, remove root motion.
+- Various loader, map and exporter fixes.
+
+Notes and test reports are in [`docs/`](docs) (in German).
 
 Not affiliated with HoYoverse. The repository contains no game assets.
 

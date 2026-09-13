@@ -27,6 +27,40 @@ namespace AnimeStudio.Migoto
                : "  (only when " + string.Join(" and ", Conditions.Select(c => c.ToString())) + ")");
     }
 
+    /// <summary>
+    /// One image the ini binds to a slot, and what had to be true for it. A mod may offer
+    /// several for the same slot -- a tattoo variant, a glossier light map -- so which one
+    /// counts is only known once the variables are chosen.
+    /// </summary>
+    public sealed class MigotoTexture
+    {
+        public string Slot { get; set; }
+        public string File { get; set; }
+        public List<IniCondition> Conditions { get; set; } = new List<IniCondition>();
+
+        public bool Applies(IReadOnlyDictionary<string, string> chosen) =>
+            chosen == null || Conditions.All(c => c.Holds(chosen));
+
+        /// <summary>
+        /// The image for a slot under the chosen variables, or null. The last binding wins:
+        /// the ini sets state in order, so a later assignment overwrites an earlier one.
+        /// </summary>
+        public static string Pick(IEnumerable<MigotoTexture> list, string slot,
+                                  IReadOnlyDictionary<string, string> chosen)
+        {
+            string found = null;
+            foreach (var t in list)
+            {
+                if (string.Equals(t.Slot, slot, StringComparison.OrdinalIgnoreCase)
+                    && t.Applies(chosen))
+                    found = t.File;
+            }
+            return found;
+        }
+
+        public override string ToString() => $"{Slot} = {System.IO.Path.GetFileName(File)}";
+    }
+
     /// <summary>An index buffer of one part, with the draws that use it.</summary>
     public sealed class MigotoObject
     {
@@ -36,7 +70,40 @@ namespace AnimeStudio.Migoto
         public int MatchFirstIndex { get; set; }
         public List<MigotoDraw> Draws { get; } = new List<MigotoDraw>();
 
+        /// <summary>
+        /// The mod's own images for this object, in the order the ini binds them. These are
+        /// the point of most mods -- the replaced geometry is UV-mapped for them, not for the
+        /// game's texture.
+        /// </summary>
+        public List<MigotoTexture> Textures { get; } = new List<MigotoTexture>();
+
+        public string Texture(string slot, IReadOnlyDictionary<string, string> chosen) =>
+            MigotoTexture.Pick(Textures, slot, chosen);
+
         public override string ToString() => $"{Name}: {Draws.Count} draw(s)";
+    }
+
+    /// <summary>
+    /// An override that binds images but draws nothing: the mod changes what a piece looks
+    /// like, not its shape.
+    ///
+    /// Faces are done this way, and for a good reason -- a replaced face mesh loses its blend
+    /// shapes, because Migoto only ever sees the finished buffer. Swapping the texture keeps
+    /// the mimicry intact.
+    /// </summary>
+    public sealed class MigotoTextureSet
+    {
+        public string Name { get; set; }
+        public List<MigotoTexture> Textures { get; } = new List<MigotoTexture>();
+
+        public string Texture(string slot, IReadOnlyDictionary<string, string> chosen) =>
+            MigotoTexture.Pick(Textures, slot, chosen);
+
+        /// <summary>What it binds, in order -- the identity of the set for telling two apart.</summary>
+        public string Signature =>
+            string.Join("|", Textures.Select(t => t.Slot + "=" + t.File));
+
+        public override string ToString() => $"{Name}: {Textures.Count} image(s)";
     }
 
     /// <summary>
@@ -80,16 +147,51 @@ namespace AnimeStudio.Migoto
         /// </summary>
         public (int Highest, int Distinct) BoneRange(List<string> warnings)
         {
+            var vertices = Vertices(warnings);
             var used = new HashSet<int>();
             var highest = -1;
-            foreach (var v in Vertices(warnings))
+            foreach (var v in vertices)
             {
                 if (v.W0 > 0) { used.Add(v.B0); highest = Math.Max(highest, v.B0); }
                 if (v.W1 > 0) { used.Add(v.B1); highest = Math.Max(highest, v.B1); }
                 if (v.W2 > 0) { used.Add(v.B2); highest = Math.Max(highest, v.B2); }
                 if (v.W3 > 0) { used.Add(v.B3); highest = Math.Max(highest, v.B3); }
             }
+            while (highest > 0 && Redundant(vertices, highest))
+            {
+                used.Remove(highest);
+                highest = used.Count == 0 ? -1 : used.Max();
+            }
             return (highest, used.Count);
+        }
+
+        /// <summary>
+        /// Whether a bone carries no weight anyone needs: every vertex that names it is
+        /// already fully weighted without it.
+        ///
+        /// Mods do this. The Pulchra outfit mod puts a full extra influence on bone 184 over
+        /// 23297 vertices whose other weights already sum to exactly 1 -- and the shipped
+        /// <c>Pulchra_Body</c> has 184 bones, so 0..183. Counting the phantom left only the
+        /// LOD avatars as candidates and hid the right target by exactly one bone.
+        /// </summary>
+        private static bool Redundant(MigotoVertex[] vertices, int bone)
+        {
+            var seen = false;
+            foreach (var v in vertices)
+            {
+                var sum = v.W0 + v.W1 + v.W2 + v.W3;
+                for (int k = 0; k < 4; k++)
+                {
+                    var w = k == 0 ? v.W0 : k == 1 ? v.W1 : k == 2 ? v.W2 : v.W3;
+                    var b = k == 0 ? v.B0 : k == 1 ? v.B1 : k == 2 ? v.B2 : v.B3;
+                    if (w <= 0 || b != bone)
+                        continue;
+                    seen = true;
+                    if (sum - w < 0.99f)
+                        return false;       // the rest of this vertex needs it
+                }
+            }
+            return seen;
         }
 
         public override string ToString() =>
@@ -111,11 +213,29 @@ namespace AnimeStudio.Migoto
     {
         public string Folder { get; private set; }
         public string IniPath { get; private set; }
+
+        /// <summary>What to call the mod: its ini for a single one, the folder when several
+        /// inis were read together.</summary>
+        public string Name { get; private set; }
         public List<MigotoPart> Parts { get; } = new List<MigotoPart>();
+
+        /// <summary>Overrides that only change textures -- nothing to replace, only to repaint.</summary>
+        public List<MigotoTextureSet> TextureSets { get; } = new List<MigotoTextureSet>();
         public List<string> Warnings { get; } = new List<string>();
 
         /// <summary>The variables the mod switches its variants with, and their values.</summary>
         public Dictionary<string, List<string>> Variables { get; private set; } =
+            new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The variables that actually decide something -- those a draw call or an image
+        /// binding sits behind.
+        ///
+        /// An ini also carries variables for the mod's own on-screen menu: mouse position,
+        /// hover state, a notification timeout. One mod declared 44 and only a third of them
+        /// changed anything about the model. Offering the rest would bury the real choices.
+        /// </summary>
+        public Dictionary<string, List<string>> DrawVariables { get; } =
             new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The value each variable starts on -- the first one it offers.</summary>
@@ -127,11 +247,112 @@ namespace AnimeStudio.Migoto
 
         private const string PositionSuffix = "Position.buf";
 
-        public static MigotoMod Load(string iniPath)
+        /// <summary>
+        /// Reads a mod folder: every ini in it, and if it holds none, every ini one level
+        /// down.
+        ///
+        /// A mod is not always one ini. Bigger ones ship a folder per piece -- body, face,
+        /// weapon -- each with its own ini, and the folder the user points at is the parent.
+        /// Taking only the first ini would have silently dropped the sword; refusing the
+        /// parent because it holds no ini itself was worse still.
+        ///
+        /// Returns null when there is nothing to read.
+        /// </summary>
+        public static MigotoMod LoadFolder(string folder)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+                return null;
+            var inis = Directory.GetFiles(folder, "*.ini");
+            if (inis.Length == 0)
+                inis = Directory.GetDirectories(folder)
+                                .SelectMany(d => Directory.GetFiles(d, "*.ini"))
+                                .ToArray();
+            if (inis.Length == 0)
+                return null;
+            Array.Sort(inis, StringComparer.OrdinalIgnoreCase);
+            if (inis.Length == 1)
+                return Load(inis[0]);
+
+            var merged = new MigotoMod
+            {
+                Folder = Path.GetFullPath(folder),
+                IniPath = inis[0],
+                Name = Path.GetFileName(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar)),
+            };
+            foreach (var path in inis)
+            {
+                // Each ini is read against its own directory, so its parts keep pointing at
+                // their own files and its leftover check only looks where it should.
+                var label = Path.GetFileNameWithoutExtension(path);
+                MigotoMod one;
+                try
+                {
+                    one = Load(path, false);
+                }
+                catch (Exception ex)
+                {
+                    merged.Warnings.Add($"{label}.ini could not be read, {ex.Message}");
+                    continue;
+                }
+                merged.Absorb(one, label);
+            }
+            merged.Parts.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+            merged.CheckLeftovers(merged.Folder);
+            merged.Warnings.Insert(0, $"{inis.Length} ini files read: "
+                + string.Join(", ", inis.Select(Path.GetFileName)));
+            return merged;
+        }
+
+        /// <summary>Takes over everything one ini contributed.</summary>
+        private void Absorb(MigotoMod one, string label)
+        {
+            foreach (var part in one.Parts)
+            {
+                // Two pieces of the same mod may both call a part "Body". Keeping them apart
+                // matters: the dialog offers one row per part and has to name them.
+                if (Parts.Any(p => string.Equals(p.Name, part.Name, StringComparison.OrdinalIgnoreCase)))
+                    part.Name = label + "/" + part.Name;
+                Parts.Add(part);
+            }
+            foreach (var set in one.TextureSets)
+            {
+                if (Parts.Any(p => string.Equals(p.Name, set.Name, StringComparison.OrdinalIgnoreCase)))
+                    set.Name = label + "/" + set.Name;
+                if (!TextureSets.Any(s => s.Signature == set.Signature))
+                    TextureSets.Add(set);
+            }
+            foreach (var texture in one.Textures)
+            {
+                if (!Textures.Contains(texture))
+                    Textures.Add(texture);
+            }
+            foreach (var kv in one.Variables)
+            {
+                if (!Variables.ContainsKey(kv.Key))
+                    Variables[kv.Key] = kv.Value;
+            }
+            foreach (var kv in one.DrawVariables)
+            {
+                if (!DrawVariables.ContainsKey(kv.Key))
+                    DrawVariables[kv.Key] = kv.Value;
+            }
+            foreach (var kv in one.Defaults)
+            {
+                if (!Defaults.ContainsKey(kv.Key))
+                    Defaults[kv.Key] = kv.Value;
+            }
+            foreach (var warning in one.Warnings)
+                Warnings.Add(label + ": " + warning);
+        }
+
+        public static MigotoMod Load(string iniPath) => Load(iniPath, true);
+
+        private static MigotoMod Load(string iniPath, bool leftovers)
         {
             var mod = new MigotoMod
             {
                 IniPath = iniPath,
+                Name = Path.GetFileNameWithoutExtension(iniPath),
                 Folder = Path.GetDirectoryName(Path.GetFullPath(iniPath)),
             };
             var ini = ModIni.Load(iniPath);
@@ -163,7 +384,10 @@ namespace AnimeStudio.Migoto
 
             mod.BuildParts(ini, resources);
             mod.AttachObjects(ini, resources);
+            mod.NoteDrawVariables();
             mod.Check();
+            if (leftovers)
+                mod.CheckLeftovers(mod.Folder);
             return mod;
         }
 
@@ -172,10 +396,14 @@ namespace AnimeStudio.Migoto
             foreach (var resource in resources.Values)
             {
                 var file = resource.Get("filename");
-                if (!file.EndsWith(PositionSuffix, StringComparison.OrdinalIgnoreCase))
+                // Only the file name identifies a part. Tidier mods sort their buffers,
+                // index buffers and textures into separate subfolders, so the path in front
+                // of the name differs between files that belong together.
+                var name = Path.GetFileName(file);
+                if (!name.EndsWith(PositionSuffix, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var stem = file.Substring(0, file.Length - PositionSuffix.Length);
+                var stem = name.Substring(0, name.Length - PositionSuffix.Length);
                 var part = new MigotoPart
                 {
                     Name = stem,
@@ -278,18 +506,31 @@ namespace AnimeStudio.Migoto
             return best;
         }
 
+        /// <summary>
+        /// Builds one object per index buffer, then runs the ini to find out what is drawn
+        /// from each.
+        ///
+        /// A section is not a unit of work. One command list binds an index buffer, draws
+        /// from it, binds a different one and draws again -- so a draw belongs to the last
+        /// <c>ib</c> before it, not to the section it stands in. Reading it per section put a
+        /// body's draws onto a leg's buffer: 208199 indices into a buffer holding 61722.
+        /// </summary>
         private void AttachObjects(ModIni ini, Dictionary<string, IniSection> resources)
         {
+            var objects = new Dictionary<string, MigotoObject>(StringComparer.OrdinalIgnoreCase);
             foreach (var resource in resources)
             {
                 var file = resource.Value.Get("filename");
                 if (!file.EndsWith(".ib", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var part = LongestMatch(file);
+                var part = LongestMatch(Path.GetFileName(file));
                 if (part == null)
                 {
-                    Warnings.Add($"index buffer {file} belongs to no known part");
+                    // Usually not a fault: a mod may replace only the index buffer of a piece
+                    // and keep the game's vertices. There is nothing to swap in that case.
+                    Warnings.Add($"index buffer {Path.GetFileName(file)} has no vertex buffers "
+                                 + "of its own -- that piece cannot be replaced");
                     continue;
                 }
 
@@ -299,33 +540,215 @@ namespace AnimeStudio.Migoto
                     IndexFile = Path.Combine(Folder, file),
                     IndexFormat = resource.Value.Get("format"),
                 };
-
-                // Every override that binds this resource as its index buffer contributes
-                // its draw calls -- that is how one buffer ends up split across materials.
-                foreach (var section in ini.Sections)
-                {
-                    var bound = section.Get("ib");
-                    if (bound == null
-                        || !bound.Equals(resource.Key, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    obj.MatchFirstIndex = section.GetInt("match_first_index", 0);
-                    foreach (var entry in section.All("drawindexed"))
-                    {
-                        var parts = entry.Value.Split(',');
-                        if (parts.Length < 2)
-                            continue;
-                        obj.Draws.Add(new MigotoDraw
-                        {
-                            IndexCount = Int(parts[0]),
-                            StartIndex = Int(parts[1]),
-                            BaseVertex = parts.Length > 2 ? Int(parts[2]) : 0,
-                            Conditions = entry.Conditions,
-                        });
-                    }
-                }
+                objects[resource.Key] = obj;
                 part.Objects.Add(obj);
             }
+
+            // The game enters the ini at an override that names a hash; everything else is
+            // reached from there through "run".
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var section in ini.Sections)
+            {
+                if (!section.Name.StartsWith("TextureOverride", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var bound = new Bound();
+                Execute(section, ini, resources, objects, new List<IniCondition>(),
+                        new HashSet<string>(StringComparer.OrdinalIgnoreCase), seen,
+                        bound, section.GetInt("match_first_index", 0));
+                NoteTextureSet(section, bound);
+            }
+        }
+
+        /// <summary>The state a run carries along: what is bound at this point.</summary>
+        private sealed class Bound
+        {
+            public MigotoObject Object;
+            public List<MigotoTexture> Textures = new List<MigotoTexture>();
+
+            /// <summary>How many draws this override reached. Zero, with images bound, means
+            /// a texture-only swap.</summary>
+            public int Draws;
+        }
+
+        /// <summary>
+        /// Records an override that bound images and drew nothing.
+        ///
+        /// The same command list is often reached from several overrides -- a quality variant
+        /// of the same piece -- and that is one swap, not two, so identical sets are folded
+        /// together. A set without a diffuse is not offered: the other slots belong to the
+        /// game's toon shader, which no importer rebuilds, and alone they would change
+        /// nothing anyone could see.
+        /// </summary>
+        private void NoteTextureSet(IniSection section, Bound bound)
+        {
+            if (bound.Draws > 0 || bound.Textures.Count == 0)
+                return;
+            var set = new MigotoTextureSet { Name = ShortName(section.Name) };
+            set.Textures.AddRange(bound.Textures);
+            if (set.Texture("Diffuse", null) == null)
+                return;
+            if (TextureSets.Any(s => s.Signature == set.Signature))
+                return;
+            TextureSets.Add(set);
+        }
+
+        private static string ShortName(string section) =>
+            section.StartsWith("TextureOverride", StringComparison.OrdinalIgnoreCase)
+                ? section.Substring("TextureOverride".Length)
+                : section;
+
+        /// <summary>
+        /// Walks one section in order, following <c>run</c> into command lists and keeping
+        /// track of what is bound, the way 3DMigoto executes it.
+        /// </summary>
+        private void Execute(IniSection section, ModIni ini,
+                             Dictionary<string, IniSection> resources,
+                             Dictionary<string, MigotoObject> objects,
+                             List<IniCondition> outer, HashSet<string> path,
+                             HashSet<string> seen, Bound bound, int matchFirstIndex)
+        {
+            if (!path.Add(section.Name))
+                return;                      // a command list that ends up running itself
+
+            foreach (var entry in section.Entries)
+            {
+                var conditions = new List<IniCondition>(outer);
+                conditions.AddRange(entry.Conditions);
+
+                if (string.Equals(entry.Key, "ib", StringComparison.OrdinalIgnoreCase))
+                {
+                    objects.TryGetValue(entry.Value, out var target);
+                    bound.Object = target;   // "ib = null" unbinds, and so does an unknown name
+                    continue;
+                }
+                if (string.Equals(entry.Key, "run", StringComparison.OrdinalIgnoreCase))
+                {
+                    var target = ini.Section(entry.Value);
+                    if (target != null)
+                        Execute(target, ini, resources, objects, conditions, path, seen,
+                                bound, matchFirstIndex);
+                    continue;
+                }
+                if (Texture(entry, resources, conditions) is MigotoTexture texture)
+                {
+                    bound.Textures.Add(texture);
+                    continue;
+                }
+                if (!string.Equals(entry.Key, "drawindexed", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var obj = bound.Object;
+                if (obj == null)
+                    continue;
+                var draw = ParseDraw(entry.Value, obj);
+                if (draw == null)
+                    continue;
+                draw.Conditions = conditions;
+                // Counted before the duplicate check: an override that only repeats a draw
+                // another one already made still drew, and is no texture-only swap.
+                bound.Draws++;
+
+                // Several overrides reach the same command list -- a low-quality variant of
+                // the same mesh, say. That is the same draw, not a second one.
+                var key = obj.Name + "|" + draw.IndexCount + "|" + draw.StartIndex + "|"
+                          + draw.BaseVertex + "|"
+                          + string.Join(",", conditions.Select(c => c.ToString()));
+                if (!seen.Add(key))
+                    continue;
+                if (obj.MatchFirstIndex == 0)
+                    obj.MatchFirstIndex = matchFirstIndex;
+                obj.Draws.Add(draw);
+                foreach (var t in bound.Textures)
+                {
+                    if (!obj.Textures.Contains(t))
+                        obj.Textures.Add(t);
+                }
+            }
+            path.Remove(section.Name);
+        }
+
+        /// <summary>
+        /// One <c>drawindexed</c>. <c>auto</c> means the whole buffer; a count of zero is a
+        /// placeholder the mod leaves in, and it draws nothing.
+        /// </summary>
+        private static MigotoDraw ParseDraw(string value, MigotoObject obj)
+        {
+            if (value.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                var whole = Available(obj);
+                return whole > 0 ? new MigotoDraw { IndexCount = whole } : null;
+            }
+            var parts = value.Split(',');
+            if (parts.Length < 2)
+                return null;
+            var count = Int(parts[0]);
+            if (count <= 0)
+                return null;
+            return new MigotoDraw
+            {
+                IndexCount = count,
+                StartIndex = Int(parts[1]),
+                BaseVertex = parts.Length > 2 ? Int(parts[2]) : 0,
+            };
+        }
+
+        /// <summary>How many indices an index buffer actually holds.</summary>
+        private static int Available(MigotoObject obj)
+        {
+            if (obj.IndexFile == null || !File.Exists(obj.IndexFile))
+                return 0;
+            var wide = obj.IndexFormat == null
+                       || obj.IndexFormat.IndexOf("R32", StringComparison.OrdinalIgnoreCase) >= 0;
+            return (int)(new FileInfo(obj.IndexFile).Length / (wide ? 4 : 2));
+        }
+
+        /// <summary>
+        /// An image binding, written as <c>Resource\ZZMI\Diffuse = ref ResourceBodyDiffuse</c>.
+        /// The last segment of the key is the slot; the value names a resource section, and
+        /// that carries the file.
+        /// </summary>
+        private MigotoTexture Texture(IniEntry entry, Dictionary<string, IniSection> resources,
+                                      List<IniCondition> conditions)
+        {
+            if (entry.Value == null
+                || !entry.Value.StartsWith("ref ", StringComparison.OrdinalIgnoreCase))
+                return null;
+            if (!resources.TryGetValue(entry.Value.Substring(4).Trim(), out var resource))
+                return null;
+
+            var file = resource.Get("filename");
+            if (file.EndsWith(".buf", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".ib", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var slot = entry.Key.Substring(entry.Key.LastIndexOfAny(new[] { '\\', '/' }) + 1).Trim();
+            var full = Path.Combine(Folder, file);
+            if (slot.Length == 0 || !File.Exists(full))
+                return null;
+            return new MigotoTexture { Slot = slot, File = full, Conditions = conditions };
+        }
+
+        /// <summary>Picks out the variables some draw or image actually depends on.</summary>
+        private void NoteDrawVariables()
+        {
+            void Note(IEnumerable<IniCondition> conditions)
+            {
+                foreach (var c in conditions)
+                {
+                    if (c.Variable == null || DrawVariables.ContainsKey(c.Variable))
+                        continue;
+                    if (Variables.TryGetValue(c.Variable, out var values))
+                        DrawVariables[c.Variable] = values;
+                }
+            }
+            foreach (var part in Parts)
+                foreach (var obj in part.Objects)
+                {
+                    foreach (var draw in obj.Draws)
+                        Note(draw.Conditions);
+                    foreach (var texture in obj.Textures)
+                        Note(texture.Conditions);
+                }
         }
 
         private MigotoPart LongestMatch(string file)
@@ -369,19 +792,30 @@ namespace AnimeStudio.Migoto
                                      + $"buffer holding {available} indices");
                 }
             }
-            if (Parts.Count == 0)
+            if (Parts.Count == 0 && TextureSets.Count == 0)
                 Warnings.Add("no parts found -- no *Position.buf next to the ini");
+        }
 
-            // Files the ini does not mention at all. Hand-edited folders keep the buffers of
-            // parts that were dropped from a later version, and they are easy to mistake for
-            // something the mod still uses.
-            foreach (var file in Directory.GetFiles(Folder, "*" + PositionSuffix))
+        /// <summary>
+        /// Files nobody mentioned. Hand-edited folders keep the buffers of parts that were
+        /// dropped from a later version, and they are easy to mistake for something the mod
+        /// still uses.
+        ///
+        /// Run once over the whole mod, not once per ini: several inis share a folder, and
+        /// each on its own would report the buffers of the others as leftovers.
+        /// </summary>
+        private void CheckLeftovers(string folder)
+        {
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in Directory.GetFiles(folder, "*" + PositionSuffix,
+                                                    SearchOption.AllDirectories))
             {
                 var name = Path.GetFileName(file);
                 var stem = name.Substring(0, name.Length - PositionSuffix.Length);
-                if (!Parts.Any(p => string.Equals(p.Name, stem, StringComparison.OrdinalIgnoreCase)))
-                    Warnings.Add($"{stem}: buffers lie in the folder but the ini never "
-                                 + "mentions them -- leftovers, ignored");
+                if (!Parts.Any(p => p.Name.EndsWith(stem, StringComparison.OrdinalIgnoreCase))
+                    && reported.Add(stem))
+                    Warnings.Add($"{stem}: buffers lie in the folder but no ini mentions "
+                                 + "them -- leftovers, ignored");
             }
         }
 
@@ -389,7 +823,8 @@ namespace AnimeStudio.Migoto
         {
             foreach (var resource in resources.Values)
             {
-                if (string.Equals(resource.Get("filename"), file, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Path.GetFileName(resource.Get("filename")), file,
+                                  StringComparison.OrdinalIgnoreCase))
                     return resource;
             }
             return null;

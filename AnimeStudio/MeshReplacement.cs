@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace AnimeStudio
 {
@@ -22,5 +23,23 @@ namespace AnimeStudio
 
         /// <summary>Material name of the original mesh's n-th submesh.</summary>
         public Func<int, string> MaterialOf { get; set; }
+
+        /// <summary>
+        /// The material the submesh at hand would otherwise use. A renderer often carries
+        /// several -- a face has one for the face and one for the eyebrows -- and a mod that
+        /// only repaints replaces exactly one of them.
+        /// </summary>
+        public string MaterialName { get; set; }
+
+        /// <summary>
+        /// The converter's material list. A replacement that brings its own textures adds a
+        /// material here and names it on its submeshes instead of asking
+        /// <see cref="MaterialOf"/>.
+        /// </summary>
+        public List<ImportedMaterial> Materials { get; set; }
+
+        /// <summary>The converter's texture list. Anything a new material names goes here,
+        /// because that is where the writer looks the name up.</summary>
+        public List<ImportedTexture> Textures { get; set; }
     }
 }

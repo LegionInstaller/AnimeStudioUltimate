@@ -70,8 +70,24 @@ namespace AnimeStudio.Migoto
             mesh.uvType[0] = 0;
             mesh.uvType[1] = 1;
 
+            var dropped = 0;
             foreach (var v in vertices)
             {
+                // An influence past the end of the target's bone list. BoneRange already
+                // established that nothing needs it -- otherwise this part would have been
+                // refused above -- so it is left out instead of writing an index the FBX
+                // cannot resolve.
+                var weights = new[] { v.W0, v.W1, v.W2, v.W3 };
+                var indices = new[] { v.B0, v.B1, v.B2, v.B3 };
+                for (int k = 0; k < 4; k++)
+                {
+                    if (indices[k] < bones.Count && indices[k] >= 0)
+                        continue;
+                    if (weights[k] > 0)
+                        dropped++;
+                    weights[k] = 0;
+                    indices[k] = 0;
+                }
                 mesh.VertexList.Add(new ImportedVertex
                 {
                     // X is negated here for the same reason the converter negates it on a
@@ -81,10 +97,14 @@ namespace AnimeStudio.Migoto
                     Tangent = new Vector4(-v.TanX, v.TanY, v.TanZ, v.TanW),
                     Color = new Color(v.ColR / 255f, v.ColG / 255f, v.ColB / 255f, v.ColA / 255f),
                     UV = Uv(v),
-                    Weights = new[] { v.W0, v.W1, v.W2, v.W3 },
-                    BoneIndices = new[] { v.B0, v.B1, v.B2, v.B3 },
+                    Weights = weights,
+                    BoneIndices = indices,
                 });
             }
+            if (dropped > 0)
+                warnings.Add($"{part.Name}: {dropped} weight(s) point past the "
+                             + $"{bones.Count} bones of the target and were left out -- the "
+                             + "vertices are fully weighted without them");
 
             BuildSubmeshes(part, mesh, vertices.Length, context, warnings, chosen);
             if (mesh.SubmeshList.Count == 0)
@@ -97,11 +117,21 @@ namespace AnimeStudio.Migoto
             return mesh;
         }
 
+        /// <summary>
+        /// The texture coordinates, with v turned around.
+        ///
+        /// A Migoto buffer holds them the way Direct3D wants them: v = 0 is the top row of
+        /// the image. FBX, and every importer reading it, puts v = 0 at the bottom. Without
+        /// the flip the texture lands mirrored across the middle of the page -- which on a
+        /// mostly black texture still looks almost right, and on a busy one is unmistakable.
+        /// Measured on both test mods by rendering the mod's own diffuse: only the flipped
+        /// set puts skin on the arms and the corset where the corset belongs.
+        /// </summary>
         private static float[][] Uv(MigotoVertex v)
         {
             var uv = new float[8][];
-            uv[0] = new[] { v.U0, v.V0 };
-            uv[1] = new[] { v.U1, v.V1 };
+            uv[0] = new[] { v.U0, 1f - v.V0 };
+            uv[1] = new[] { v.U1, 1f - v.V1 };
             return uv;
         }
 
@@ -166,11 +196,85 @@ namespace AnimeStudio.Migoto
                     {
                         FaceList = faces,
                         BaseVertex = 0,          // every draw indexes the one shared buffer
-                        Material = context.MaterialOf?.Invoke(material),
+                        Material = ModMaterial(obj, context, warnings, chosen)
+                                   ?? context.MaterialOf?.Invoke(material),
                     });
                     material++;
                 }
             }
+        }
+
+        /// <summary>
+        /// A material carrying the mod's own images, or null when the mod binds none for this
+        /// object -- then the original's material stands, as it did before.
+        ///
+        /// It has to be the mod's textures: a mod re-maps its geometry for the images it
+        /// ships, so the game's texture on the mod's UVs is not an approximation but a
+        /// different layout altogether. Measured on the Remielle mod against the shipped
+        /// mesh, the same point on the body sits 0.58 apart in u.
+        ///
+        /// Only the two slots an FBX has a place for are linked. The light and material maps
+        /// belong to the game's toon shader, which no importer reconstructs; they are copied
+        /// next to the model and left for whoever wants them.
+        /// </summary>
+        private static string ModMaterial(MigotoObject obj, MeshReplacementContext context,
+                                          List<string> warnings,
+                                          IReadOnlyDictionary<string, string> chosen) =>
+            Material(obj.Name, obj.Textures, context, warnings, chosen);
+
+        /// <summary>
+        /// The same material, built from a bare list of bindings. A mod that only repaints a
+        /// piece -- a face, say -- has no geometry to hang them off, so the images arrive on
+        /// their own.
+        /// </summary>
+        public static string Material(string forName, IReadOnlyList<MigotoTexture> bindings,
+                                      MeshReplacementContext context, List<string> warnings,
+                                      IReadOnlyDictionary<string, string> chosen)
+        {
+            if (context.Materials == null || context.Textures == null || bindings.Count == 0)
+                return null;
+
+            var name = "MOD_" + forName;
+            if (context.Materials.Any(m => m.Name == name))
+                return name;
+
+            var textures = new List<ImportedMaterialTexture>();
+            foreach (var slot in new[] { ("Diffuse", 0), ("NormalMap", 1) })
+            {
+                var path = MigotoTexture.Pick(bindings, slot.Item1, chosen);
+                if (path == null)
+                    continue;
+                var existing = context.Textures.FirstOrDefault(
+                    t => t.Name == System.IO.Path.GetFileNameWithoutExtension(path) + ".png");
+                var texture = existing ?? ModTextures.Load(path, warnings);
+                if (texture == null)
+                    continue;
+                if (existing == null)
+                    context.Textures.Add(texture);
+                textures.Add(new ImportedMaterialTexture
+                {
+                    Name = texture.Name,
+                    Dest = slot.Item2,
+                    Offset = new Vector2(0, 0),
+                    Scale = new Vector2(1, 1),
+                });
+            }
+            if (textures.Count == 0)
+                return null;
+
+            context.Materials.Add(new ImportedMaterial
+            {
+                Name = name,
+                Diffuse = new Color(1, 1, 1, 1),
+                Ambient = new Color(0, 0, 0, 1),
+                Specular = new Color(0, 0, 0, 1),
+                Emissive = new Color(0, 0, 0, 1),
+                Reflection = new Color(0, 0, 0, 1),
+                Shininess = 0,
+                Transparency = 0,
+                Textures = textures,
+            });
+            return name;
         }
 
         /// <summary>

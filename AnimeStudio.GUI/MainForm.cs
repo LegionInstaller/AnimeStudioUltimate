@@ -137,6 +137,9 @@ namespace AnimeStudio.GUI
             FMODinit();
         }
 
+        /// <summary>The mesh-replacement window while it is open. One at a time.</summary>
+        private MigotoForm migotoForm;
+
         /// <summary>
         /// Adds the mesh-replacement entry to the Export menu. Done here rather than in the
         /// designer file so the generated layout stays untouched.
@@ -146,8 +149,19 @@ namespace AnimeStudio.GUI
             var item = new ToolStripMenuItem("Replace meshes from a 3DMigoto mod...");
             item.Click += (s, e) =>
             {
-                using var form = new MigotoForm();
-                form.ShowDialog(this);
+                // Modeless on purpose. The export sits in this window, so a modal dialog would
+                // force a close before every attempt -- and with it the folder, the mapping and
+                // the chosen variants, all to be picked again.
+                if (migotoForm == null || migotoForm.IsDisposed)
+                {
+                    migotoForm = new MigotoForm();
+                    migotoForm.FormClosed += (_, _) => migotoForm = null;
+                    migotoForm.Show(this);
+                    return;
+                }
+                if (migotoForm.WindowState == FormWindowState.Minimized)
+                    migotoForm.WindowState = FormWindowState.Normal;
+                migotoForm.Activate();
             };
             exportToolStripMenuItem.DropDownItems.Add(new ToolStripSeparator());
             exportToolStripMenuItem.DropDownItems.Add(item);
@@ -1678,6 +1692,7 @@ namespace AnimeStudio.GUI
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
                 replaceMesh = MigotoSwap.Hook,
+                replaceMaterial = MigotoSwap.MaterialHook,
             };
             var model = new ModelConverter(m_GameObject, options, Array.Empty<AnimationClip>());
             PreviewModel(model);
@@ -1694,6 +1709,7 @@ namespace AnimeStudio.GUI
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
                 replaceMesh = MigotoSwap.Hook,
+                replaceMaterial = MigotoSwap.MaterialHook,
             };
             var model = new ModelConverter(m_Animator, options, Array.Empty<AnimationClip>());
             PreviewModel(model);

@@ -284,6 +284,8 @@ namespace AnimeStudio
                 Original = mesh,
                 PathOf = GetTransformPath,
                 MaterialOf = index => ConvertMaterial(MaterialAt(meshR, index)).Name,
+                Materials = MaterialList,
+                Textures = TextureList,
             });
             if (replacement != null)
             {
@@ -350,7 +352,17 @@ namespace AnimeStudio
                     }
                 }
                 ImportedMaterial iMat = ConvertMaterial(mat);
-                iSubmesh.Material = iMat.Name;
+                // The same outsider may want to repaint this renderer without touching its
+                // geometry -- a face, whose blend shapes a replaced mesh would lose. Null,
+                // the normal case, leaves the material exactly as it was.
+                iSubmesh.Material = options.replaceMaterial?.Invoke(new MeshReplacementContext
+                {
+                    Renderer = meshR,
+                    Original = mesh,
+                    Materials = MaterialList,
+                    Textures = TextureList,
+                    MaterialName = iMat.Name,
+                }) ?? iMat.Name;
                 iSubmesh.BaseVertex = (int)mesh.m_SubMeshes[i].firstVertex;
 
                 //Face
@@ -1286,6 +1298,13 @@ namespace AnimeStudio
             /// instead. Null -- the normal case -- changes nothing at all.
             /// </summary>
             public Func<MeshReplacementContext, ImportedMesh> replaceMesh;
+
+            /// <summary>
+            /// Offered a renderer whose mesh was *not* replaced; a name it returns is used
+            /// for that renderer's submeshes instead of the material of the asset. Null --
+            /// the normal case -- changes nothing at all.
+            /// </summary>
+            public Func<MeshReplacementContext, string> replaceMaterial;
         }
     }
 }

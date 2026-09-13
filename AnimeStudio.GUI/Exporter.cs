@@ -462,6 +462,7 @@ namespace AnimeStudio.GUI
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
                 replaceMesh = MigotoSwap.Hook,
+                replaceMaterial = MigotoSwap.MaterialHook,
             };
             var convert = animationList != null
                 ? new ModelConverter(m_Animator, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
@@ -501,6 +502,7 @@ namespace AnimeStudio.GUI
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
                 replaceMesh = MigotoSwap.Hook,
+                replaceMaterial = MigotoSwap.MaterialHook,
             };
             var convert = animationList != null
                 ? new ModelConverter(gameObject, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
@@ -539,6 +541,7 @@ namespace AnimeStudio.GUI
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
                 replaceMesh = MigotoSwap.Hook,
+                replaceMaterial = MigotoSwap.MaterialHook,
             };
             var convert = animationList != null
                 ? new ModelConverter(rootName, gameObject, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())

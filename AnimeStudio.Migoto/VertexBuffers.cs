@@ -37,6 +37,31 @@ namespace AnimeStudio.Migoto
         public const int PositionStride = 40;
         public const int BlendStride = 32;
 
+        /// <summary>
+        /// The layout of a rigidly bound piece: one 32-bit bone index per vertex and no
+        /// weights, because there is only one bone to weight against.
+        ///
+        /// Measured on Miyabi's sword, all three pieces: the buffer is exactly four bytes
+        /// per vertex, and read as uint32 the values run 0..6 -- a handful of bones, one per
+        /// vertex. Props are bound this way; a body never is.
+        /// </summary>
+        public const int RigidBlendStride = 4;
+
+        /// <summary>
+        /// The same, with a weight field behind the index.
+        ///
+        /// Measured on the mask of a Pulchra mod: all 584 vertices carry the identical eight
+        /// bytes, index field 0 and the second field 1. The shipped <c>Pulchra_Mask</c>
+        /// renderer has exactly **one** bone, so 0 is the only index that can be meant --
+        /// which settles the order. Read the other way round the index would be 1, and there
+        /// is no bone 1 to point at.
+        ///
+        /// What the trailing field encodes is not decidable from one uniform sample, so it is
+        /// not interpreted: a piece bound to a single bone is weighted fully to it, and the
+        /// reader says so.
+        /// </summary>
+        public const int RigidWeightedBlendStride = 8;
+
         public static MigotoVertex[] Read(string positionFile, int positionStride,
                                           string blendFile, int blendStride,
                                           string texcoordFile, int texcoordStride,
@@ -146,10 +171,21 @@ namespace AnimeStudio.Migoto
             var data = Open(file, stride, vertices.Length, "blend buffer", warnings);
             if (data == null)
                 return;
+            if (stride == RigidBlendStride || stride == RigidWeightedBlendStride)
+            {
+                ReadRigidBlend(data, stride, vertices);
+                if (stride == RigidWeightedBlendStride)
+                    warnings.Add($"blend buffer: stride {stride} carries one bone index and a "
+                                 + "weight field of unknown encoding; the piece is taken as "
+                                 + "rigidly bound to that bone");
+                return;
+            }
             if (stride != BlendStride)
             {
-                warnings.Add($"blend buffer: stride {stride} is not the known layout "
-                             + $"({BlendStride}: four weights, four 32-bit indices)");
+                warnings.Add($"blend buffer: stride {stride} is not a known layout "
+                             + $"({BlendStride}: four weights and four 32-bit indices; "
+                             + $"{RigidBlendStride} and {RigidWeightedBlendStride}: one index, "
+                             + "rigidly bound)");
                 return;
             }
             var offWeight = 0;
@@ -169,9 +205,22 @@ namespace AnimeStudio.Migoto
                 if (Math.Abs(sum - 1f) > 0.01f)
                     offWeight++;
             }
+            // Not a layout problem when it happens in bulk: mod authors add a full extra
+            // influence on a helper bone, and those vertices come to exactly two. Said as the
+            // fact it is, so nobody goes looking for a misread buffer.
             if (offWeight > vertices.Length / 20)
-                warnings.Add($"blend buffer: {offWeight} of {vertices.Length} vertices have "
-                             + "weights that do not sum to one -- the layout may be wrong");
+                warnings.Add($"blend buffer: {offWeight} of {vertices.Length} vertices carry "
+                             + "weights that do not sum to one -- passed on unchanged");
+        }
+
+        /// <summary>One bone per vertex, full weight on it. The index leads.</summary>
+        private static void ReadRigidBlend(byte[] data, int stride, MigotoVertex[] vertices)
+        {
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                vertices[i].W0 = 1f;
+                vertices[i].B0 = (int)BitConverter.ToUInt32(data, i * stride);
+            }
         }
 
         private static void ReadTexcoords(string file, int stride, MigotoVertex[] vertices,

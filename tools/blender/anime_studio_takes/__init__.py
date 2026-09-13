@@ -26,12 +26,13 @@ data-block at once.
 import re
 
 import bpy
+from mathutils import Matrix, Vector
 from bpy.props import BoolProperty, EnumProperty, IntProperty
 
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 4, 0),
+    "version": (1, 6, 2),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -701,6 +702,119 @@ def diagnose(scan):
 # UI
 
 
+# --------------------------------------------------------------------------------------
+# root motion
+
+
+def _drop_curves(action, data_path):
+    """Removes every f-curve on `data_path`, wherever this Blender version keeps it."""
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        for curve in [f for f in legacy if f.data_path == data_path]:
+            legacy.remove(curve)
+        return
+    for layer in action.layers:
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", ()):
+                for curve in [f for f in bag.fcurves if f.data_path == data_path]:
+                    bag.fcurves.remove(curve)
+
+
+def _root_candidates(arm):
+    """The bones that could be carrying the whole figure.
+
+    Not only the parentless one: a rig often puts a static root above the real carrier --
+    ZZZ calls it `Bone_Root` and never animates it -- so its direct children count too.
+    """
+    tops = [b for b in arm.data.bones if b.parent is None]
+    return tops + [child for b in tops for child in b.children]
+
+
+def _carrier(arm, first, last):
+    """Which bone the travel sits on, measured rather than named.
+
+    Sample every candidate at both ends of the clip, keep the ones that actually go
+    somewhere, and among those take the one the rest of the skeleton hangs from. That last
+    step is what makes it right on a ZZZ rig: nine bones sit side by side under the root and
+    all nine travel the same distance, but the body has four hundred descendants and the
+    floaters have three.
+    """
+    scene = bpy.context.scene
+    best, best_children = None, -1
+    for bone in _root_candidates(arm):
+        pose = arm.pose.bones.get(bone.name)
+        if pose is None:
+            continue
+        scene.frame_set(first)
+        start = (arm.matrix_world @ pose.matrix).translation.copy()
+        scene.frame_set(last)
+        end = (arm.matrix_world @ pose.matrix).translation.copy()
+        if (end - start).length < 1e-5:
+            continue
+        count = len(bone.children_recursive)
+        if count > best_children:
+            best, best_children = bone.name, count
+    return best
+
+
+def remove_root_motion(arm, action, axes):
+    """Takes the travel out of one action by moving the object the other way.
+
+    Not by editing the carrier's location curves. Every bone sits in its own rest
+    orientation, so one and the same world movement lands in different local axes for each
+    of them: measured on a ZZZ run the hip carries it on local x (4.54) while a floater
+    splits it over x (3.07) and y (3.34), and both come to the same 0.045 in the world.
+    Countering on the object moves everything at once and leaves every relationship intact --
+    checked to five decimals on the distance between hip and floater.
+
+    Returns (bone, world offset) or (None, None).
+    """
+    scene = bpy.context.scene
+    ad = arm.animation_data
+    if ad is None or action is None:
+        return None, None
+    first, last = (int(round(v)) for v in action.frame_range)
+    if last <= first:
+        return None, None
+
+    # Whatever moves the object itself is root motion too, and a leftover from an earlier
+    # click would otherwise be countered a second time.
+    _drop_curves(action, "location")
+
+    bone = _carrier(arm, first, last)
+    if bone is None:
+        return None, None
+
+    pose = arm.pose.bones[bone]
+    path = {}
+    for frame in range(first, last + 1):
+        scene.frame_set(frame)
+        path[frame] = (arm.matrix_world @ pose.matrix).translation.copy()
+    start = path[first]
+
+    # Where the object stands at every frame, before anything is countered. Recorded in one
+    # pass, because the second pass writes keyframes and would otherwise measure its own work.
+    placement = {}
+    for frame in range(first, last + 1):
+        scene.frame_set(frame)
+        placement[frame] = arm.matrix_world.copy()
+
+    # Countered through `matrix_world`, not through `location`.
+    #
+    # `location` is the parent's space, and working out what a world offset becomes in there
+    # is exactly where this went wrong twice: under the merge export's empty the offset ended
+    # up on the wrong axis and lifted the character instead of holding it. Blender does that
+    # conversion correctly for its own matrix, whatever the parent and its inverse hold.
+    for frame in range(first, last + 1):
+        scene.frame_set(frame)
+        shift = Vector((0.0, 0.0, 0.0))
+        for axis in axes:                       # the axes are the world's, as the panel says
+            shift[axis] = -(path[frame][axis] - start[axis])
+        arm.matrix_world = Matrix.Translation(shift) @ placement[frame]
+        arm.keyframe_insert("location", frame=frame)
+
+    return bone, (path[last] - start)
+
 def _take_items(self, context):
     """Every clip, one entry each. Layered clips are marked, not folded away."""
     _enum_cache.clear()
@@ -847,6 +961,98 @@ class ANIMESTUDIO_OT_report(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class ANIMESTUDIO_OT_root_motion(bpy.types.Operator):
+    bl_idname = "anime_studio.root_motion"
+    bl_label = "Remove Root Motion"
+    bl_description = ("Keep the character on the spot: the travel is countered on the "
+                      "object, so every bone keeps its relationship to the others")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    all_takes: BoolProperty(
+        name="All takes",
+        description="Do it for every take of this character, not just the current one",
+        default=False,
+    )
+
+    def _actions(self, arm, scan):
+        """What to work on.
+
+        The active action is only one of the ways a take can be playing. After `Push All
+        Takes to NLA` there is none at all -- the takes sit in strips -- and looking only at
+        the active action left the character walking away with the button reporting nothing
+        to do.
+        """
+        adt = arm.animation_data
+        found = []
+        if self.all_takes:
+            found = [scan.per_id.get(arm, {}).get(take) for take in scan.takes]
+        elif adt is not None and adt.action is not None:
+            found = [adt.action]
+        if not found and adt is not None:
+            found = [strip.action for track in adt.nla_tracks for strip in track.strips
+                     if strip.action is not None]
+        seen, out = set(), []
+        for action in found:
+            if action is not None and action.name not in seen:
+                seen.add(action.name)
+                out.append(action)
+        return out
+
+    def execute(self, context):
+        scan = Scan(context.object)
+        if not scan.armatures:
+            self.report({'WARNING'}, "No armature on this character")
+            return {'CANCELLED'}
+        axes = sorted("XYZ".index(a) for a in context.scene.anime_studio_root_axes)
+        if not axes:
+            self.report({'WARNING'}, "No axis selected")
+            return {'CANCELLED'}
+
+        arm = scan.armatures[0]
+        adt = arm.animation_data
+        frame_back = context.scene.frame_current
+        done, bones = 0, set()
+        moved = Vector((0.0, 0.0, 0.0))
+
+        actions = self._actions(arm, scan)
+        if not actions:
+            self.report({'WARNING'}, "No take on this armature")
+            return {'CANCELLED'}
+
+        # An action has to be sampled on its own. With the NLA still live, the strips blend
+        # into the pose and the measured travel would be somebody else's.
+        muted = [(t, t.mute) for t in (adt.nla_tracks if adt else ())]
+        back = adt.action if adt else None
+        for track, _ in muted:
+            track.mute = True
+        try:
+            for action in actions:
+                _assign(arm, action)
+                bone, offset = remove_root_motion(arm, action, axes)
+                if bone is None:
+                    continue
+                done += 1
+                for i in range(3):
+                    moved[i] += abs(offset[i])
+                bones.add(bone)
+        finally:
+            _assign(arm, back)
+            for track, was in muted:
+                track.mute = was
+
+        context.scene.frame_set(frame_back)
+        if not done:
+            self.report({'WARNING'}, f"Nothing travels in {_few([a.name for a in actions])}")
+            return {'CANCELLED'}
+        # Named per axis, because which one carries the travel is not obvious: under a
+        # rotated parent the character walks along world Z, and flattening X and Y then
+        # holds nothing.
+        self.report({'INFO'},
+                    f"{done} take(s) put back on the spot, carried by {_few(sorted(bones))} "
+                    f"-- travel X {moved.x:.3f}  Y {moved.y:.3f}  Z {moved.z:.3f}")
+        return {'FINISHED'}
+
+
 class ANIMESTUDIO_PT_takes(bpy.types.Panel):
     bl_label = "Takes"
     bl_idname = "ANIMESTUDIO_PT_takes"
@@ -895,6 +1101,16 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
         layout.separator()
         layout.operator(ANIMESTUDIO_OT_push_nla.bl_idname, icon='NLA')
 
+        box = layout.box()
+        box.label(text="Root motion", icon='CON_LOCLIKE')
+        row = box.row(align=True)
+        row.label(text="Flatten")
+        row.prop(context.scene, "anime_studio_root_axes", expand=True)
+        box.operator(ANIMESTUDIO_OT_root_motion.bl_idname,
+                     icon='ANCHOR_CENTER').all_takes = False
+        box.operator(ANIMESTUDIO_OT_root_motion.bl_idname, text="Remove in All Takes",
+                     icon='ANCHOR_CENTER').all_takes = True
+
         layout.prop(context.scene, "anime_studio_show_details")
         if context.scene.anime_studio_show_details:
             box = layout.box()
@@ -904,7 +1120,7 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
 
 
 _classes = (ANIMESTUDIO_OT_apply_take, ANIMESTUDIO_OT_combine, ANIMESTUDIO_OT_push_nla,
-            ANIMESTUDIO_OT_report, ANIMESTUDIO_PT_takes)
+            ANIMESTUDIO_OT_root_motion, ANIMESTUDIO_OT_report, ANIMESTUDIO_PT_takes)
 
 
 def register():
@@ -922,6 +1138,18 @@ def register():
         items=_layer_items,
         options={'ENUM_FLAG'},
     )
+    bpy.types.Scene.anime_studio_root_axes = EnumProperty(
+        name="Flatten",
+        description=("Which world axes to hold still. X and Y are the ground a character "
+                     "walks on and Z is the height, so Z stays off: holding it drags the "
+                     "body down through the floor wherever the animation leaves the ground. "
+                     "The message after the click says which axis carried the travel"),
+        items=[('X', "X", "Hold the world X axis"),
+               ('Y', "Y", "Hold the world Y axis"),
+               ('Z', "Z", "Hold the world Z axis -- off keeps jumps")],
+        options={'ENUM_FLAG'},
+        default={'X', 'Y'},
+    )
     bpy.types.Scene.anime_studio_show_details = BoolProperty(
         name="Show details",
         description="Show what the scan found on this character",
@@ -931,6 +1159,7 @@ def register():
 
 def unregister():
     del bpy.types.Scene.anime_studio_show_details
+    del bpy.types.Scene.anime_studio_root_axes
     del bpy.types.Scene.anime_studio_layers
     del bpy.types.Scene.anime_studio_take
     for cls in reversed(_classes):

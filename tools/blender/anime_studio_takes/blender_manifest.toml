@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "anime_studio_takes"
-version = "1.4.0"
+version = "1.6.2"
 name = "AnimeStudio Takes"
 tagline = "Switch armature and all shape-key actions of a take together"
 maintainer = "AnimeStudio Ultimate"

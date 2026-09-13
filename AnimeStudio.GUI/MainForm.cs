@@ -2644,6 +2644,24 @@ namespace AnimeStudio.GUI
             Properties.Settings.Default.Save();
         }
 
+        // By instance, not by type: every UnityCN game shares one GameType, so looking the
+        // game up by type always landed on the first of them and used its key.
+        public void updateGame(Game game)
+        {
+            int index = GameManager.GetGameIndex(game);
+            Properties.Settings.Default.selectedGame = index;
+            Properties.Settings.Default.Save();
+            ResetForm();
+            Studio.Game = game;
+            Logger.Info($"Target Game is {Studio.Game.Name}");
+            if (Studio.Game.IsUnityCN() && Studio.Game is UnityCNGame unityCnGame)
+            {
+                UnityCNManager.SetKey(unityCnGame.Key);
+            }
+            assetsManager.SpecifyUnityVersion = specifyUnityVersion.Text;
+            assetsManager.Game = Studio.Game;
+        }
+
         public void updateGame(GameType mapGame)
         {
             Game game = GameManager.GetGameByType(mapGame);

@@ -16,8 +16,8 @@ More detail in [`docs/`](docs):
 [ZZZ animations](docs/zzz-animations.md),
 [3DMigoto mesh replacement](docs/migoto-mesh-replacement.md),
 [Blender add-on](docs/blender-addon.md),
-[ZZZ animator controllers](docs/zzz-animator-controllers.md),
-[loader fixes](docs/loader-fixes.md),
+[rebuilding combos in Blender](docs/zzz-animator-controllers.md),
+[fixes](docs/loader-fixes.md),
 [performance](docs/performance.md).
 
 Not affiliated with HoYoverse. The repository contains no game assets.

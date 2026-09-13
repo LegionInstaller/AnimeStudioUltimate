@@ -674,11 +674,25 @@ namespace AnimeStudio
             return FixBonePath(path);
         }
 
+        /// <summary>
+        /// The frame path a curve belongs to.
+        ///
+        /// Remembered, because the search behind it walks the whole frame tree and this runs
+        /// once per curve per frame. The tree does not change once the animations are being
+        /// converted, so the answer for a path cannot change either.
+        /// </summary>
         private string FixBonePath(string path)
         {
+            if (path == null)
+                return null;
+            if (bonePathCache.TryGetValue(path, out var known))
+                return known;
             var frame = RootFrame.FindFrameByPath(path);
-            return frame?.Path;
+            return bonePathCache[path] = frame?.Path;
         }
+
+        private readonly Dictionary<string, string> bonePathCache =
+            new Dictionary<string, string>(StringComparer.Ordinal);
 
         private static string GetTransformPathByFather(Transform transform)
         {

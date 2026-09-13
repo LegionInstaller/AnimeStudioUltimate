@@ -230,25 +230,66 @@ namespace AnimeStudio
     {
         public string Name { get; set; }
         public float SampleRate { get; set; }
-        public List<ImportedAnimationKeyframedTrack> TrackList { get; set; }
 
+        private List<ImportedAnimationKeyframedTrack> trackList;
+        private Dictionary<string, ImportedAnimationKeyframedTrack> firstByPath;
+        private Dictionary<(string, string), ImportedAnimationKeyframedTrack> byChannel;
+
+        public List<ImportedAnimationKeyframedTrack> TrackList
+        {
+            get => trackList;
+            set { trackList = value; firstByPath = null; byChannel = null; }
+        }
+
+        /// <summary>
+        /// The track for a bone path, or for a bone path and a blend-shape channel; created
+        /// on first use.
+        ///
+        /// Looked up once per curve per frame, which for a character of a few hundred bones
+        /// is millions of times per clip. Scanning the list and comparing strings made that
+        /// the bulk of an export; two dictionaries answer the same question.
+        ///
+        /// They have to answer it *exactly* the same way. Without an attribute the first
+        /// track ever added under that path wins, blend shape or not. With one, only a track
+        /// created for that channel counts -- a plain bone track carries no channel and never
+        /// matches, which is what makes a blend shape get a track of its own.
+        /// </summary>
         public ImportedAnimationKeyframedTrack FindTrack(string path, string attribute = null)
         {
-            var track = TrackList.Find(t => {
-                if (attribute == null)
-                {
-                    return t.Path == path;
-                } else {
-                    return t.Path == path && t.BlendShape?.ChannelName == attribute;
-                }
-            });
-            if (track == null)
+            if (firstByPath == null)
+                BuildIndex();
+
+            if (attribute == null)
             {
-                track = new ImportedAnimationKeyframedTrack { Path = path };
-                TrackList.Add(track);
+                if (firstByPath.TryGetValue(path ?? "", out var known))
+                    return known;
+            }
+            else if (byChannel.TryGetValue((path ?? "", attribute), out var known))
+            {
+                return known;
             }
 
+            var track = new ImportedAnimationKeyframedTrack { Path = path };
+            TrackList.Add(track);
+            Remember(track, attribute);
             return track;
+        }
+
+        private void BuildIndex()
+        {
+            firstByPath = new Dictionary<string, ImportedAnimationKeyframedTrack>(StringComparer.Ordinal);
+            byChannel = new Dictionary<(string, string), ImportedAnimationKeyframedTrack>();
+            foreach (var track in TrackList)
+                Remember(track, track.BlendShape?.ChannelName);
+        }
+
+        private void Remember(ImportedAnimationKeyframedTrack track, string attribute)
+        {
+            var path = track.Path ?? "";
+            if (!firstByPath.ContainsKey(path))
+                firstByPath[path] = track;
+            if (attribute != null && !byChannel.ContainsKey((path, attribute)))
+                byChannel[(path, attribute)] = track;
         }
     }
 

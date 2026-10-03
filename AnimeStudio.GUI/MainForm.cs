@@ -1956,6 +1956,8 @@ namespace AnimeStudio.GUI
             sortColumn = -1;
             reverseSort = false;
             listSearch.Text = string.Empty;
+            treeSrcResults.Clear();
+            nextGObject = 0;
 
             var count = filterTypeToolStripMenuItem.DropDownItems.Count;
             for (var i = 1; i < count; i++)
@@ -1964,6 +1966,10 @@ namespace AnimeStudio.GUI
             }
 
             FMODreset();
+            // A big load holds many GB. Collect it now: otherwise the next load starts while
+            // the old one is still in memory, needs room for both, and the PC starts swapping.
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect();
             StatusStripUpdate("Reset successfully !!");
         }
 

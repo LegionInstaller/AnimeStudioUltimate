@@ -881,6 +881,10 @@ namespace AnimeStudio
                 iAnim.SampleRate = animationClip.m_SampleRate;
                 iAnim.TrackList = new List<ImportedAnimationKeyframedTrack>();
                 AnimationList.Add(iAnim);
+                // Reading the keyframes is the slow part of a model export. Skip it when they
+                // won't be written, but keep the take: the FBX gets its frame rate from it.
+                if (!options.exportAnimations)
+                    continue;
                 if (animationClip.m_Legacy)
                 {
                     foreach (var m_CompressedRotationCurve in animationClip.m_CompressedRotationCurves)
@@ -1288,6 +1292,11 @@ namespace AnimeStudio
             public ImageFormat imageFormat;
             public Game game;
             public bool collectAnimations;
+            /// <summary>
+            /// False lists the clips but doesn't read their keyframes, for files written
+            /// without animations. True by default.
+            /// </summary>
+            public bool exportAnimations = true;
             public bool exportMaterials;
             public HashSet<Material> materials;
             public Dictionary<string, (bool, int)> uvs;

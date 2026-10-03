@@ -16,7 +16,7 @@ Measured on a 16-thread machine with 32 GB RAM.
 
 It depends on how many animation files you load, not on the character. Load only the model and the export takes seconds. Load a character's whole moveset and it can take minutes.
 
-Unticking "Export animations" alone doesn't make it faster, because the animations are still read, just not written. Untick "Collect animations" too, or don't load the animation files.
+If you only need the model, untick "Export animations". The animations are then skipped completely, so having lots of animation files loaded doesn't slow the export down.
 
 ## More speed with lots of RAM
 

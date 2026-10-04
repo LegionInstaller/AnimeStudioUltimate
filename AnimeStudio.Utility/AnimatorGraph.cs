@@ -15,12 +15,34 @@ namespace AnimeStudio
     {
         public const string Extension = ".animator.json";
 
-        /// <summary>Writes "&lt;fbx name&gt;.animator.json". False if there is no controller to write.</summary>
-        public static bool TryWrite(Animator animator, string fbxPath)
+        /// <summary>
+        /// Writes "&lt;fbx name&gt;.animator.json" for an export. The animator's own controller is
+        /// used when it has one. A _Model prefab has none (the controller sits on the playable
+        /// prefab), and a merged export may have no animator at all; then the loaded controller
+        /// that holds most of the exported clips is taken. False if nothing fits.
+        /// </summary>
+        public static bool TryWrite(Animator animator, string fbxPath, IEnumerable<string> exportedClips = null, SerializedFile loadedFrom = null)
         {
-            if (animator == null || !animator.m_Controller.TryGet(out var runtime))
+            RuntimeAnimatorController runtime = null;
+            if (animator == null || !animator.m_Controller.TryGet(out runtime) || Resolve(runtime).controller == null)
+                runtime = BestMatch(exportedClips, loadedFrom ?? animator?.assetsFile);
+            var (controller, overrides) = Resolve(runtime);
+            if (controller == null)
+            {
+                Logger.Info($"No animator graph for {Path.GetFileName(fbxPath)}: no loaded AnimatorController plays its clips");
                 return false;
+            }
 
+            var graph = Build(controller, overrides);
+            var path = Path.Combine(Path.GetDirectoryName(fbxPath) ?? "", Path.GetFileNameWithoutExtension(fbxPath) + Extension);
+            File.WriteAllText(path, JsonConvert.SerializeObject(graph, Formatting.Indented));
+            Logger.Info($"Animator graph of {runtime.m_Name} written to {Path.GetFileName(path)}");
+            return true;
+        }
+
+        /// <summary>The base controller and, for an override controller, its clip replacements.</summary>
+        private static (AnimatorController controller, Dictionary<AnimationClip, AnimationClip> overrides) Resolve(RuntimeAnimatorController runtime)
+        {
             var overrides = new Dictionary<AnimationClip, AnimationClip>();
             var controller = runtime as AnimatorController;
             if (runtime is AnimatorOverrideController overrideController)
@@ -34,12 +56,38 @@ namespace AnimeStudio
                 }
             }
             if (controller?.m_Controller == null || controller.m_Controller.m_LayerArray.Count == 0)
-                return false;
+                return (null, overrides);
+            return (controller, overrides);
+        }
 
-            var graph = Build(controller, overrides);
-            var path = Path.Combine(Path.GetDirectoryName(fbxPath) ?? "", Path.GetFileNameWithoutExtension(fbxPath) + Extension);
-            File.WriteAllText(path, JsonConvert.SerializeObject(graph, Formatting.Indented));
-            return true;
+        /// <summary>The loaded controller whose clips overlap most with the exported ones.</summary>
+        private static RuntimeAnimatorController BestMatch(IEnumerable<string> exportedClips, SerializedFile loadedFrom)
+        {
+            var wanted = new HashSet<string>(exportedClips ?? Enumerable.Empty<string>());
+            var files = loadedFrom?.assetsManager?.assetsFileList;
+            if (wanted.Count == 0 || files == null)
+                return null;
+
+            RuntimeAnimatorController best = null;
+            int bestHits = 0, bestSize = 0;
+            foreach (var runtime in files.SelectMany(f => f.Objects).OfType<RuntimeAnimatorController>())
+            {
+                var (controller, overrides) = Resolve(runtime);
+                if (controller == null)
+                    continue;
+                var names = controller.m_AnimationClips
+                    .Select(p => p.TryGet(out var clip) ? (overrides.TryGetValue(clip, out var o) ? o : clip).m_Name : null)
+                    .Where(n => n != null).Distinct().ToList();
+                var hits = names.Count(wanted.Contains);
+                // Most exported clips first; between equals, the one with the bigger graph.
+                if (hits > bestHits || (hits == bestHits && hits > 0 && names.Count > bestSize))
+                {
+                    best = runtime;
+                    bestHits = hits;
+                    bestSize = names.Count;
+                }
+            }
+            return best;
         }
 
         private static Dictionary<string, object> Build(AnimatorController controller, Dictionary<AnimationClip, AnimationClip> overrides)

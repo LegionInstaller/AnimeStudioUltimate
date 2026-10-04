@@ -479,8 +479,8 @@ namespace AnimeStudio.GUI
                 }
             }
             ExportFbx(convert, exportFullPath);
-            if (Properties.Settings.Default.exportAnimations)
-                AnimatorGraph.TryWrite(m_Animator, exportFullPath);
+            if (Properties.Settings.Default.exportAnimations && convert.AnimationList.Count > 0)
+                AnimatorGraph.TryWrite(m_Animator, exportFullPath, convert.AnimationList.Select(a => a.Name));
             return true;
         }
 
@@ -529,8 +529,8 @@ namespace AnimeStudio.GUI
             }
             exportPath = exportPath + FixFileName(gameObject.m_Name) + ".fbx";
             ExportFbx(convert, exportPath);
-            if (Properties.Settings.Default.exportAnimations && gameObject.m_Animator != null)
-                AnimatorGraph.TryWrite(gameObject.m_Animator, exportPath);
+            if (Properties.Settings.Default.exportAnimations && convert.AnimationList.Count > 0)
+                AnimatorGraph.TryWrite(gameObject.m_Animator, exportPath, convert.AnimationList.Select(a => a.Name), gameObject.assetsFile);
             return true;
         }
 
@@ -564,6 +564,9 @@ namespace AnimeStudio.GUI
                 }
             }
             ExportFbx(convert, exportPath);
+            if (Properties.Settings.Default.exportAnimations && convert.AnimationList.Count > 0)
+                AnimatorGraph.TryWrite(gameObject.Select(g => g.m_Animator).FirstOrDefault(a => a != null), exportPath,
+                    convert.AnimationList.Select(a => a.Name), gameObject.FirstOrDefault()?.assetsFile);
         }
 
         private static void ExportFbx(IImported convert, string exportPath)

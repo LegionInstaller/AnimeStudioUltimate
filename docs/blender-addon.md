@@ -1,6 +1,6 @@
 # Blender add-on: AnimeStudio Takes
 
-When you export a character with several animations into one FBX, Blender imports all of them, but only plays the first one. Switching the animation on the skeleton doesn't switch the face, so the face keeps playing the wrong clip. This add-on fixes that and adds a few helpers.
+When you export a character with several animations into one FBX, Blender imports all of them, but only plays the first one. Switching the animation on the skeleton doesn't switch the face, so the face keeps playing the wrong clip. This add-on fixes that, can build combos the way the game plays them, and adds a few helpers.
 
 ## Install
 
@@ -30,6 +30,28 @@ Some animations move the character forward (walks, runs, dashes). To keep it on 
 2. Click Remove Root Motion for the current animation, or Remove in All Takes for all of them.
 
 The message after the click shows how far the character moved on each axis. If it still moves, turn on the axis with the big number and run it again.
+
+## Building combos
+
+You type in the button presses, the add-on plays them through the game's own animator and lays the clips out in the NLA editor with the game's timing. Needs Blender 5.0 or newer.
+
+1. In AnimeStudio, export the character with "Export animations" on. Next to the FBX you get a `<name>.animator.json` with the animator's states and transitions.
+2. Import the FBX into Blender and click a part of the character.
+3. In the "Combo" box, pick that `.animator.json`.
+4. Click the inputs in order, for example PressAttackA three times. They show up in the text field below.
+5. Click Build Combo.
+
+Every input comes at the earliest frame the game accepts it, like a perfect player. Clips that follow on their own (an attack's `_End` clip, the way back to Idle) are added too. For Pulchra, PressAttackA three times gives exactly the chain from [Rebuilding ZZZ combos in Blender](zzz-animator-controllers.md).
+
+More in the text field:
+
+- `PressEvade PressAttackA+PerfectEvade`: two inputs in the same moment, joined by `+`.
+- `Int_BranchIndex=1`: set a value from that point on, here the ExSpecial instead of the Special.
+- `wait`: let the current clip play out before the next input.
+
+If an input isn't possible at that point (for example a move the character can't do from where it is), the add-on says where the chain broke off. "Show all inputs" also offers the triggers the game sets itself, like Hit. "Idle" is how long the start state plays before the first input, and "Start" picks a different start state.
+
+Blender before 5.0 cuts clip names at 63 characters, so clips of one character can't be told apart reliably. That's why combos need 5.0.
 
 ## Other scripts
 

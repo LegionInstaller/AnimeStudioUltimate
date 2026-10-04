@@ -21,18 +21,25 @@ driven by its own layer of the AnimatorController. The list still shows every cl
 own; where such layers are found, "Combine Layered Clips" appears and plays the ticked
 ones together from stacked NLA tracks, which is the only way to run several actions on one
 data-block at once.
+
+With the .animator.json AnimeStudio writes next to the FBX, "Build Combo" plays a list of
+inputs through the game's animator and lays the clips out on NLA tracks with the game's
+own timing (see combo.py).
 """
 
+import os
 import re
 
 import bpy
 from mathutils import Matrix, Vector
-from bpy.props import BoolProperty, EnumProperty, IntProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+
+from . import combo
 
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 6, 2),
+    "version": (1, 7, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -684,6 +691,84 @@ def push_all_takes_to_nla(obj=None):
     return pushed, len(scan.per_id)
 
 
+_graphs = {}
+
+
+def load_graph(path):
+    """The animator graph at `path`, read again only when the file changed."""
+    path = bpy.path.abspath(path)
+    stamp = os.path.getmtime(path)
+    cached = _graphs.get(path)
+    if cached is None or cached[0] != stamp:
+        cached = (stamp, combo.Graph.load(path))
+        _graphs[path] = cached
+    return cached[1]
+
+
+def _take_for_clip(scan, clip):
+    """The take that holds `clip`, or None if the file does not have it."""
+    return clip if clip and clip in scan.takes else None
+
+
+def build_combo(obj, graph, segments, origin=1):
+    """Lays the played-out combo onto NLA tracks of every animated data-block.
+
+    One track per clip, each above the one before, so the newer clip takes over after its
+    blend-in. Strips run to the end of their own clip even when the next one has started,
+    which is what the game does: the old clip keeps moving under the new one while they
+    blend. The body's layered clips (face, outfit) come along on their own tracks.
+
+    Returns (clips placed, takes that are not in the file).
+    """
+    scan = Scan(obj)
+    scale = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base / graph.rate
+    placed, missing = 0, []
+    for data in scan.per_id:
+        if not data.animation_data:
+            data.animation_data_create()
+        data.animation_data.action = None
+        _clear_our_tracks(data.animation_data, scan.takes)
+
+    last_frame = origin
+    for index, seg in enumerate(segments):
+        state = graph.states[seg.state]
+        take = _take_for_clip(scan, state.get("clip"))
+        if take is None:
+            if state.get("clip"):
+                missing.append(state["clip"])
+            continue
+        start = origin + (seg.start - seg.offset) * scale
+        blend = seg.blend * scale
+        final = index == len(segments) - 1
+        wrote = False
+        for data in scan.per_id:
+            adt = data.animation_data
+            for part in scan.group_of(take):
+                action, _ = scan.action_for(data, part)
+                if action is None:
+                    continue
+                slot = _pick_slot(action, data)
+                if slot is None and getattr(action, "slots", None):
+                    continue
+                track = adt.nla_tracks.new()
+                track.name = f"{_NLA_MARK}{index:02d} {state['name']}"
+                strip = track.strips.new(part, int(round(start)), action)
+                strip.blend_type = 'REPLACE'
+                strip.extrapolation = 'HOLD' if final else 'NOTHING'
+                length = strip.frame_end - strip.frame_start
+                strip.blend_in = min(blend, max(length - 1, 0))
+                if slot is not None and hasattr(strip, "action_slot"):
+                    strip.action_slot = slot
+                last_frame = max(last_frame, strip.frame_end)
+                wrote = True
+        placed += wrote
+
+    scene = bpy.context.scene
+    scene.frame_start = origin
+    scene.frame_end = int(last_frame)
+    return placed, missing
+
+
 def diagnose(scan):
     """Why a scan found what it found -- shown in the panel when no takes turned up."""
     lines = [
@@ -1053,6 +1138,105 @@ class ANIMESTUDIO_OT_root_motion(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _graph_or_error(context):
+    """(graph, None), (None, why not) or (None, None) when no file is picked yet."""
+    path = context.scene.anime_studio_graph
+    if not path:
+        return None, None
+    try:
+        return load_graph(path), None
+    except (OSError, ValueError, KeyError, combo.ComboError) as e:
+        return None, f"Can't read the graph: {e}"
+
+
+def _inputs(graph, everything):
+    """The inputs to offer as buttons. The player's own presses first, the rest on request."""
+    triggers = graph.triggers()
+    pressed = [t for t in triggers if "Press" in t]
+    if everything or not pressed:
+        return pressed + [t for t in triggers if t not in pressed]
+    return pressed
+
+
+class ANIMESTUDIO_OT_combo_input(bpy.types.Operator):
+    bl_idname = "anime_studio.combo_input"
+    bl_label = "Add Step"
+    bl_description = "Add this as the next step of the combo"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    token: StringProperty(options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        scene = context.scene
+        scene.anime_studio_combo = (scene.anime_studio_combo + " " + self.token).strip()
+        return {'FINISHED'}
+
+
+class ANIMESTUDIO_OT_combo_edit(bpy.types.Operator):
+    bl_idname = "anime_studio.combo_edit"
+    bl_label = "Edit Combo"
+    bl_description = "Remove the last step, or all of them"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    action: EnumProperty(items=[('UNDO', "Undo", "Remove the last step"),
+                                ('CLEAR', "Clear", "Remove every step")],
+                         options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        steps = context.scene.anime_studio_combo.split()
+        context.scene.anime_studio_combo = " ".join(steps[:-1] if self.action == 'UNDO' else [])
+        return {'FINISHED'}
+
+
+class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
+    bl_idname = "anime_studio.combo_build"
+    bl_label = "Build Combo"
+    bl_description = ("Play the combo through the game's animator, every input at the "
+                      "earliest frame it is accepted, and lay the clips out on NLA tracks")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        scene = context.scene
+        if bpy.app.version < (5, 0, 0):
+            # Older versions cut action names at 63 characters. Clips of one character then
+            # arrive under the same shortened name, and clips of equal length cannot be told
+            # apart, and a combo would silently play the wrong ones.
+            self.report({'ERROR'}, "Build Combo needs Blender 5.0 or newer: older versions "
+                                   "shorten clip names, so the clips can't be matched reliably")
+            return {'CANCELLED'}
+        graph, error = _graph_or_error(context)
+        if graph is None:
+            self.report({'WARNING'}, error or "Pick the .animator.json AnimeStudio wrote next to the FBX")
+            return {'CANCELLED'}
+        try:
+            segments, notes = combo.play(graph, scene.anime_studio_combo,
+                                         start=scene.anime_studio_combo_start,
+                                         lead_in=scene.anime_studio_combo_lead,
+                                         settle=scene.anime_studio_combo_settle)
+        except combo.ComboError as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        placed, missing = build_combo(context.object, graph, segments)
+        print(f"Combo on {graph.controller}: {scene.anime_studio_combo or '(no input)'}")
+        for line in combo.describe(graph, segments):
+            print("  " + line)
+        for note in notes:
+            print("  note: " + note)
+
+        msg = f"{placed} clip(s) laid out, frames {scene.frame_start}-{scene.frame_end}"
+        if notes:
+            msg += f"  ({notes[0]})"
+        if missing:
+            msg += f"  (not in this file: {_few(missing)})"
+        self.report({'WARNING' if missing else 'INFO'}, msg)
+        return {'FINISHED'}
+
+
 class ANIMESTUDIO_PT_takes(bpy.types.Panel):
     bl_label = "Takes"
     bl_idname = "ANIMESTUDIO_PT_takes"
@@ -1111,6 +1295,8 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
         box.operator(ANIMESTUDIO_OT_root_motion.bl_idname, text="Remove in All Takes",
                      icon='ANCHOR_CENTER').all_takes = True
 
+        self.draw_combo(context, layout.box())
+
         layout.prop(context.scene, "anime_studio_show_details")
         if context.scene.anime_studio_show_details:
             box = layout.box()
@@ -1118,9 +1304,44 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
                 box.label(text=line)
             box.operator(ANIMESTUDIO_OT_report.bl_idname, icon='CONSOLE')
 
+    def draw_combo(self, context, box):
+        scene = context.scene
+        box.label(text="Combo", icon='SEQUENCE')
+        if bpy.app.version < (5, 0, 0):
+            box.label(text="Needs Blender 5.0 or newer", icon='ERROR')
+            return
+        box.prop(scene, "anime_studio_graph", text="")
+        graph, error = _graph_or_error(context)
+        if error:
+            box.label(text=error, icon='ERROR')
+            return
+        if graph is None:
+            box.label(text="Pick the .animator.json next to the FBX")
+            return
+
+        box.label(text=graph.controller)
+        grid = box.grid_flow(columns=2, even_columns=True, align=True)
+        for name in _inputs(graph, scene.anime_studio_combo_all):
+            label = name.replace("Trigger_", "")
+            grid.operator(ANIMESTUDIO_OT_combo_input.bl_idname, text=label).token = label
+        box.prop(scene, "anime_studio_combo_all")
+
+        row = box.row(align=True)
+        row.operator(ANIMESTUDIO_OT_combo_input.bl_idname, text="Wait", icon='TIME').token = "wait"
+        row.operator(ANIMESTUDIO_OT_combo_edit.bl_idname, text="Undo", icon='BACK').action = 'UNDO'
+        row.operator(ANIMESTUDIO_OT_combo_edit.bl_idname, text="Clear", icon='X').action = 'CLEAR'
+        box.prop(scene, "anime_studio_combo", text="")
+
+        row = box.row(align=True)
+        row.prop(scene, "anime_studio_combo_start", text="Start")
+        row.prop(scene, "anime_studio_combo_lead", text="Idle")
+        box.prop(scene, "anime_studio_combo_settle")
+        box.operator(ANIMESTUDIO_OT_combo_build.bl_idname, icon='NLA_PUSHDOWN')
+
 
 _classes = (ANIMESTUDIO_OT_apply_take, ANIMESTUDIO_OT_combine, ANIMESTUDIO_OT_push_nla,
-            ANIMESTUDIO_OT_root_motion, ANIMESTUDIO_OT_report, ANIMESTUDIO_PT_takes)
+            ANIMESTUDIO_OT_root_motion, ANIMESTUDIO_OT_report, ANIMESTUDIO_OT_combo_input,
+            ANIMESTUDIO_OT_combo_edit, ANIMESTUDIO_OT_combo_build, ANIMESTUDIO_PT_takes)
 
 
 def register():
@@ -1155,9 +1376,45 @@ def register():
         description="Show what the scan found on this character",
         default=False,
     )
+    bpy.types.Scene.anime_studio_graph = StringProperty(
+        name="Animator graph",
+        description="The .animator.json AnimeStudio writes next to an FBX exported with animations",
+        subtype='FILE_PATH',
+    )
+    bpy.types.Scene.anime_studio_combo = StringProperty(
+        name="Combo",
+        description=("The steps, separated by spaces. Inputs as on the buttons, several at once "
+                     "joined by +, a parameter as Name=value (e.g. Int_BranchIndex=1), and "
+                     "wait to let the current clip play out"),
+    )
+    bpy.types.Scene.anime_studio_combo_start = StringProperty(
+        name="Start state",
+        description="The state the combo starts from. Empty starts from Idle",
+    )
+    bpy.types.Scene.anime_studio_combo_lead = IntProperty(
+        name="Idle before",
+        description="Frames of the start state that play before the first input",
+        default=30, min=0,
+    )
+    bpy.types.Scene.anime_studio_combo_settle = BoolProperty(
+        name="Back to rest at the end",
+        description="Let the last clip play out the way the game does, e.g. its _End clip and back to Idle",
+        default=True,
+    )
+    bpy.types.Scene.anime_studio_combo_all = BoolProperty(
+        name="Show all inputs",
+        description="Also offer the triggers the game sets itself, like Hit or Switch_In",
+        default=False,
+    )
 
 
 def unregister():
+    del bpy.types.Scene.anime_studio_combo_all
+    del bpy.types.Scene.anime_studio_combo_settle
+    del bpy.types.Scene.anime_studio_combo_lead
+    del bpy.types.Scene.anime_studio_combo_start
+    del bpy.types.Scene.anime_studio_combo
+    del bpy.types.Scene.anime_studio_graph
     del bpy.types.Scene.anime_studio_show_details
     del bpy.types.Scene.anime_studio_root_axes
     del bpy.types.Scene.anime_studio_layers
@@ -1166,6 +1423,7 @@ def unregister():
         bpy.utils.unregister_class(cls)
     _enum_cache.clear()
     _layer_cache.clear()
+    _graphs.clear()
 
 
 if __name__ == "__main__":

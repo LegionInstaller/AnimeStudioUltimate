@@ -149,6 +149,17 @@ namespace AnimeStudio
         public bool m_Atomic;
         public bool m_CanTransitionToSelf;
 
+        // ZZZ only. With m_UseFrameCount set, the game times the transition in frames of the
+        // source clip and the normalized m_ExitTime / m_TransitionOffset can be out of date.
+        public float m_AutoTransitionOffsetValue;
+        public float m_AutoTransitionOffsetRatio;
+        public int m_FrameCount;
+        public int m_TransitionOffsetCount;
+        public int m_TotalFramesSrc;
+        public int m_TotalFramesDest;
+        public bool m_UseFrameCount;
+        public bool m_AutoTransitionOffset;
+
         public TransitionConstant(ObjectReader reader)
         {
             var version = reader.version;
@@ -184,26 +195,26 @@ namespace AnimeStudio
             {
                 if (reader.Game.Type.IsZZZCB2() || reader.Game.Type.IsZZZ())
                 {
-                    var m_AutoTransitionOffsetValue = reader.ReadSingle();
-                    var m_AutoTransitionOffsetRatio = reader.ReadSingle();
+                    m_AutoTransitionOffsetValue = reader.ReadSingle();
+                    m_AutoTransitionOffsetRatio = reader.ReadSingle();
                 }
                 m_ExitTime = reader.ReadSingle();
                 if (reader.Game.Type.IsZZZCB2() || reader.Game.Type.IsZZZ())
                 {
-                    var m_FrameCount = reader.ReadInt32();
-                    var m_TransitionOffsetCount = reader.ReadInt32();
-                    var m_TotalFramesSrc = reader.ReadInt32();
-                    var m_TotalFramesDest = reader.ReadInt32();
+                    m_FrameCount = reader.ReadInt32();
+                    m_TransitionOffsetCount = reader.ReadInt32();
+                    m_TotalFramesSrc = reader.ReadInt32();
+                    m_TotalFramesDest = reader.ReadInt32();
                 }
                 m_HasExitTime = reader.ReadBoolean();
                 if (reader.Game.Type.IsZZZCB2() || reader.Game.Type.IsZZZ())
                 {
-                    var m_UseFrameCount = reader.ReadBoolean();
+                    m_UseFrameCount = reader.ReadBoolean();
                 }
                 m_HasFixedDuration = reader.ReadBoolean();
                 if (reader.Game.Type.IsZZZCB2() || reader.Game.Type.IsZZZ())
                 {
-                    var m_AutoTransitionOffset = reader.ReadBoolean();
+                    m_AutoTransitionOffset = reader.ReadBoolean();
                 }
                 reader.AlignStream();
                 m_InterruptionSource = reader.ReadInt32();

@@ -326,8 +326,8 @@ class _Run:
     def settle(self):
         """Lets automatic transitions run until a state just keeps playing.
 
-        A state that comes round again would repeat for good -- a walk cycle while
-        Bool_IsMoving is still on -- so the run stops there instead and says so.
+        A state that comes round again would repeat for good, like a walk cycle while
+        Bool_IsMoving is still on, so the run stops there instead and says so.
         """
         seen = {self.state}
         limit = self.limit()

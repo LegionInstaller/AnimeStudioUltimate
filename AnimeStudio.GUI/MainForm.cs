@@ -1935,6 +1935,10 @@ namespace AnimeStudio.GUI
         /// a millisecond to delete one node, so a big load took minutes to clear. A fresh tree
         /// takes the old one's place at once, and the old one is taken apart in small slices.
         /// </summary>
+        [DllImport("user32.dll")]
+        private static extern uint GetQueueStatus(uint flags);
+        private const uint QS_INPUT = 0x0407;
+
         private void ClearSceneTree()
         {
             var old = sceneTreeView;
@@ -1975,12 +1979,16 @@ namespace AnimeStudio.GUI
                     pending.Push(child);
             }
 
-            var timer = new System.Windows.Forms.Timer { Interval = 15 };
+            // Short slices that give way to any mouse or keyboard input, so the window stays smooth.
+            // The rest of the old tree just waits; it no longer holds anything big. Drawing stays
+            // off for good: ending an update makes Windows go over the whole remaining tree, which
+            // on a big one stalls the window for more than a second each time.
+            old.BeginUpdate();
+            var timer = new System.Windows.Forms.Timer { Interval = 25 };
             timer.Tick += (s, e) =>
             {
                 var clock = Stopwatch.StartNew();
-                old.BeginUpdate();
-                while (old.Nodes.Count > 0 && clock.ElapsedMilliseconds < 20)
+                while (old.Nodes.Count > 0 && clock.ElapsedMilliseconds < 6 && (GetQueueStatus(QS_INPUT) >> 16) == 0)
                 {
                     // Deepest last node first, so each delete removes a single item.
                     var node = old.Nodes[old.Nodes.Count - 1];
@@ -1988,7 +1996,6 @@ namespace AnimeStudio.GUI
                         node = node.Nodes[node.Nodes.Count - 1];
                     node.Remove();
                 }
-                old.EndUpdate();
                 if (old.Nodes.Count == 0)
                 {
                     timer.Stop();

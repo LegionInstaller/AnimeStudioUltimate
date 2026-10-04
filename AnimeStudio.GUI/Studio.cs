@@ -509,8 +509,20 @@ namespace AnimeStudio.GUI
             int j = 0;
             Progress.Reset();
             var files = assetsManager.assetsFileList.GroupBy(x => x.originalPath ?? string.Empty).OrderBy(x => x.Key).ToDictionary(x => x.Key, x => x.ToList());
+            // After a load from the asset browser, only the files picked there go into the tree.
+            // The rest came in as dependencies, and a tree of all their GameObjects reaches
+            // hundreds of thousands of nodes, which then take minutes to clear on the next load.
+            var picked = assetsManager.FilterData.Items.Where(x => !string.IsNullOrEmpty(x.Source))
+                .Select(x => Path.GetFileName(x.Source)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!files.Keys.Any(f => picked.Contains(Path.GetFileName(f))))
+                picked.Clear();
             foreach (var (file, assetsFiles) in files)
             {
+                if (picked.Count > 0 && !picked.Contains(Path.GetFileName(file)))
+                {
+                    Progress.Report(++j, files.Count);
+                    continue;
+                }
                 var fileNode = !string.IsNullOrEmpty(file) ? new TreeNode(Path.GetFileName(file)) : null; //RootNode
 
                 foreach (var assetsFile in assetsFiles)

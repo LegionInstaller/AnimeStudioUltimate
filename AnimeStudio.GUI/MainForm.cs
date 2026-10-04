@@ -1968,8 +1968,7 @@ namespace AnimeStudio.GUI
             FMODreset();
             // A big load holds many GB. Collect it now: otherwise the next load starts while
             // the old one is still in memory, needs room for both, and the PC starts swapping.
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
             StatusStripUpdate("Reset successfully !!");
         }
 

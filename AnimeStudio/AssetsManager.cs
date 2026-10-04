@@ -845,6 +845,8 @@ namespace AnimeStudio
             ClearLoadedAssets();
 
             assetsFileListHash.Clear();
+            // A filter belongs to the load it was set for; left in place it narrows the next one.
+            FilterData = new AssetFilterData { Items = new List<AssetFilterDataItem>() };
 
             tokenSource.Dispose();
             tokenSource = new CancellationTokenSource();

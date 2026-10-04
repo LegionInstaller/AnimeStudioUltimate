@@ -1930,6 +1930,75 @@ namespace AnimeStudio.GUI
             MessageBox.Show(message);
         }
 
+        /// <summary>
+        /// Empties the scene tree without freezing the window. Windows needs about a quarter of
+        /// a millisecond to delete one node, so a big load took minutes to clear. A fresh tree
+        /// takes the old one's place at once, and the old one is taken apart in small slices.
+        /// </summary>
+        private void ClearSceneTree()
+        {
+            var old = sceneTreeView;
+            if (old.GetNodeCount(true) < 5000)
+            {
+                old.Nodes.Clear();
+                return;
+            }
+
+            var fresh = new GOHierarchy
+            {
+                BackColor = old.BackColor,
+                BorderStyle = old.BorderStyle,
+                CheckBoxes = old.CheckBoxes,
+                Dock = old.Dock,
+                HideSelection = old.HideSelection,
+                Location = old.Location,
+                Name = old.Name,
+                Size = old.Size,
+                TabIndex = old.TabIndex,
+            };
+            fresh.AfterCheck += sceneTreeView_AfterCheck;
+            var parent = old.Parent;
+            var index = parent.Controls.GetChildIndex(old);
+            parent.Controls.Remove(old);
+            parent.Controls.Add(fresh);
+            parent.Controls.SetChildIndex(fresh, index);
+            sceneTreeView = fresh;
+
+            // The waiting nodes must not keep the old load alive.
+            var pending = new Stack<TreeNode>(old.Nodes.Cast<TreeNode>());
+            while (pending.Count > 0)
+            {
+                var node = pending.Pop();
+                if (node is GameObjectTreeNode gameObjectNode)
+                    gameObjectNode.gameObject = null;
+                foreach (TreeNode child in node.Nodes)
+                    pending.Push(child);
+            }
+
+            var timer = new System.Windows.Forms.Timer { Interval = 15 };
+            timer.Tick += (s, e) =>
+            {
+                var clock = Stopwatch.StartNew();
+                old.BeginUpdate();
+                while (old.Nodes.Count > 0 && clock.ElapsedMilliseconds < 20)
+                {
+                    // Deepest last node first, so each delete removes a single item.
+                    var node = old.Nodes[old.Nodes.Count - 1];
+                    while (node.Nodes.Count > 0)
+                        node = node.Nodes[node.Nodes.Count - 1];
+                    node.Remove();
+                }
+                old.EndUpdate();
+                if (old.Nodes.Count == 0)
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    old.Dispose();
+                }
+            };
+            timer.Start();
+        }
+
         public void ResetForm()
         {
             Text = AppTitle;
@@ -1937,7 +2006,7 @@ namespace AnimeStudio.GUI
             assemblyLoader.Clear();
             exportableAssets.Clear();
             visibleAssets.Clear();
-            sceneTreeView.Nodes.Clear();
+            ClearSceneTree();
             assetListView.VirtualListSize = 0;
             assetListView.Items.Clear();
             classesListView.Items.Clear();

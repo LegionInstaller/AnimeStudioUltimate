@@ -756,7 +756,6 @@ def build_combo(obj, graph, segments, origin=1):
     for index, seg, state, take in plan:
         start = origin + (seg.start - seg.offset) * scale
         blend = seg.blend * scale
-        final = index == len(segments) - 1
         wrote = False
         for data in scan.per_id:
             adt = data.animation_data
@@ -771,10 +770,11 @@ def build_combo(obj, graph, segments, origin=1):
                 track.name = f"{_NLA_MARK}{index:02d} {state['name']}"
                 strip = track.strips.new(part, int(round(start)), action)
                 strip.blend_type = 'REPLACE'
-                # Plain HOLD would also hold the first frame *before* the strip, and the last
-                # strip sits on top of every other one -- with no blend-in it froze the whole
-                # combo on its first frame.
-                strip.extrapolation = 'HOLD_FORWARD' if final else 'NOTHING'
+                # Every clip holds its last frame, as the game does while it blends out of a
+                # clip that has ended; the newer track above covers it once its blend-in is
+                # done. Plain HOLD would also hold the first frame *before* the strip, and the
+                # last strip sits on top of all others: that froze the whole combo.
+                strip.extrapolation = 'HOLD_FORWARD'
                 length = strip.frame_end - strip.frame_start
                 strip.blend_in = min(blend, max(length - 1, 0))
                 if slot is not None and hasattr(strip, "action_slot"):

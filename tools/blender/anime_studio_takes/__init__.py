@@ -727,18 +727,22 @@ def build_combo(obj, graph, segments, origin=1):
     """
     scan = Scan(obj)
     plan, missing, unloaded = [], [], []
+    step = "start"
     for index, seg in enumerate(segments):
         state = graph.states[seg.state]
+        if seg.cause != "follows on its own":
+            step = seg.cause            # the input whose chain this clip belongs to
         if state.get("clipUnloaded"):
             unloaded.append(state["name"])
         elif state.get("clip"):
             take = _take_for_clip(scan, state["clip"])
             if take is None:
-                missing.append(state["clip"])
+                if (step, state["clip"]) not in missing:
+                    missing.append((step, state["clip"]))
             else:
                 plan.append((index, seg, state, take))
     if missing or unloaded:
-        return 0, sorted(set(missing)), sorted(set(unloaded))
+        return 0, missing, sorted(set(unloaded))
 
     scale = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base / graph.rate
     placed = 0
@@ -1251,7 +1255,13 @@ class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
             # Nothing was changed. Say exactly what is needed to make it work.
             parts = []
             if missing:
-                parts.append(f"not in the imported FBX: {_few([_short(c) for c in missing])}. "
+                # Grouped by the input that leads there: the game may play clips for a press
+                # that their names don't suggest, and this says which press needs them.
+                needed = {}
+                for step, clip in missing:
+                    needed.setdefault(step, []).append(_short(clip))
+                listed = "; ".join(f"{_few(clips)} (for {step})" for step, clips in needed.items())
+                parts.append(f"not in the imported FBX: {listed}. "
                              "Export the character again with these animations included")
             if unloaded:
                 parts.append(f"clips of {_few(unloaded)} were not loaded in AnimeStudio when "

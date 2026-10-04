@@ -771,7 +771,10 @@ def build_combo(obj, graph, segments, origin=1):
                 track.name = f"{_NLA_MARK}{index:02d} {state['name']}"
                 strip = track.strips.new(part, int(round(start)), action)
                 strip.blend_type = 'REPLACE'
-                strip.extrapolation = 'HOLD' if final else 'NOTHING'
+                # Plain HOLD would also hold the first frame *before* the strip, and the last
+                # strip sits on top of every other one -- with no blend-in it froze the whole
+                # combo on its first frame.
+                strip.extrapolation = 'HOLD_FORWARD' if final else 'NOTHING'
                 length = strip.frame_end - strip.frame_start
                 strip.blend_in = min(blend, max(length - 1, 0))
                 if slot is not None and hasattr(strip, "action_slot"):

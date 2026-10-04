@@ -49,7 +49,9 @@ More in the text field:
 - `Int_BranchIndex=1`: set a value from that point on, here the ExSpecial instead of the Special.
 - `wait`: let the current clip play out before the next input.
 
-If an input isn't possible at that point (for example a move the character can't do from where it is), the add-on says where the chain broke off. "Show all inputs" also offers the triggers the game sets itself, like Hit. "Idle" is how long the start state plays before the first input, and "Start" picks a different start state.
+If an input isn't possible at that point (for example a move the character can't do from where it is), the add-on says where the chain broke off.
+
+If the combo needs a clip that isn't in the imported FBX, or one that wasn't loaded in AnimeStudio when you exported, nothing is built and your scene stays as it was. The message lists the clips, so you know what to export again. "Show all inputs" also offers the triggers the game sets itself, like Hit. "Idle" is how long the start state plays before the first input, and "Start" picks a different start state.
 
 Blender before 5.0 cuts clip names at 63 characters, so clips of one character can't be told apart reliably. That's why combos need 5.0.
 

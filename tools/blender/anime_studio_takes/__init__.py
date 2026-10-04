@@ -718,11 +718,30 @@ def build_combo(obj, graph, segments, origin=1):
     which is what the game does: the old clip keeps moving under the new one while they
     blend. The body's layered clips (face, outfit) come along on their own tracks.
 
-    Returns (clips placed, takes that are not in the file).
+    Nothing is touched unless every clip the combo needs is there: a combo with holes
+    looks like a broken animation rather than a missing file. In that case nothing is
+    placed and the clips are returned instead.
+
+    Returns (clips placed, clips missing from the FBX, states whose clip AnimeStudio had
+    not loaded when it exported).
     """
     scan = Scan(obj)
+    plan, missing, unloaded = [], [], []
+    for index, seg in enumerate(segments):
+        state = graph.states[seg.state]
+        if state.get("clipUnloaded"):
+            unloaded.append(state["name"])
+        elif state.get("clip"):
+            take = _take_for_clip(scan, state["clip"])
+            if take is None:
+                missing.append(state["clip"])
+            else:
+                plan.append((index, seg, state, take))
+    if missing or unloaded:
+        return 0, sorted(set(missing)), sorted(set(unloaded))
+
     scale = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base / graph.rate
-    placed, missing = 0, []
+    placed = 0
     for data in scan.per_id:
         if not data.animation_data:
             data.animation_data_create()
@@ -730,13 +749,7 @@ def build_combo(obj, graph, segments, origin=1):
         _clear_our_tracks(data.animation_data, scan.takes)
 
     last_frame = origin
-    for index, seg in enumerate(segments):
-        state = graph.states[seg.state]
-        take = _take_for_clip(scan, state.get("clip"))
-        if take is None:
-            if state.get("clip"):
-                missing.append(state["clip"])
-            continue
+    for index, seg, state, take in plan:
         start = origin + (seg.start - seg.offset) * scale
         blend = seg.blend * scale
         final = index == len(segments) - 1
@@ -766,7 +779,13 @@ def build_combo(obj, graph, segments, origin=1):
     scene = bpy.context.scene
     scene.frame_start = origin
     scene.frame_end = int(last_frame)
-    return placed, missing
+    return placed, [], []
+
+
+def _short(clip):
+    """The part of a clip name behind the character, e.g. Attack_Normal_02."""
+    head, sep, tail = clip.partition("_Ani_")
+    return tail if sep else clip
 
 
 def diagnose(scan):
@@ -1221,19 +1240,31 @@ class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        placed, missing = build_combo(context.object, graph, segments)
+        placed, missing, unloaded = build_combo(context.object, graph, segments)
         print(f"Combo on {graph.controller}: {scene.anime_studio_combo or '(no input)'}")
         for line in combo.describe(graph, segments):
             print("  " + line)
         for note in notes:
             print("  note: " + note)
 
+        if missing or unloaded:
+            # Nothing was changed. Say exactly what is needed to make it work.
+            parts = []
+            if missing:
+                parts.append(f"not in the imported FBX: {_few([_short(c) for c in missing])}. "
+                             "Export the character again with these animations included")
+            if unloaded:
+                parts.append(f"clips of {_few(unloaded)} were not loaded in AnimeStudio when "
+                             "exporting. Load the character's animation files too and export again")
+            for line in parts:
+                print("  not built: " + line)
+            self.report({'ERROR'}, "Combo not built, nothing changed. " + "; ".join(parts))
+            return {'CANCELLED'}
+
         msg = f"{placed} clip(s) laid out, frames {scene.frame_start}-{scene.frame_end}"
         if notes:
             msg += f"  ({notes[0]})"
-        if missing:
-            msg += f"  (not in this file: {_few(missing)})"
-        self.report({'WARNING' if missing else 'INFO'}, msg)
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 

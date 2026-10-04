@@ -70,29 +70,33 @@ namespace AnimeStudio
                 return (int)Math.Round((muscle.m_StopTime - muscle.m_StartTime) * r);
             }
 
-            AnimationClip ClipOf(StateConstant state, out bool blended)
+            // unloaded: the state plays a clip, but it was not among the loaded assets, so
+            // its name cannot be known. Said out loud so a combo cannot skip it unnoticed.
+            AnimationClip ClipOf(StateConstant state, out bool blended, out bool unloaded)
             {
-                blended = false;
                 var leaves = state.m_BlendTreeConstantArray
                     .SelectMany(tree => tree.m_NodeArray)
                     .Where(node => node.m_ChildIndices == null || node.m_ChildIndices.Length == 0)
                     .ToList();
                 blended = leaves.Count > 1;
                 var leaf = leaves.FirstOrDefault();
-                return leaf != null && leaf.m_ClipID < clips.Count ? clips[(int)leaf.m_ClipID] : null;
+                var clip = leaf != null && leaf.m_ClipID < clips.Count ? clips[(int)leaf.m_ClipID] : null;
+                unloaded = leaf != null && clip == null;
+                return clip;
             }
 
             var stateFrames = new List<int>();
             var states = new List<Dictionary<string, object>>();
             foreach (var state in machine.m_StateConstantArray)
             {
-                var clip = ClipOf(state, out var blended);
+                var clip = ClipOf(state, out var blended, out var unloaded);
                 stateFrames.Add(Frames(clip));
                 states.Add(new Dictionary<string, object>
                 {
                     ["name"] = Name(state.m_NameID),
                     ["path"] = Name(state.m_FullPathID),
                     ["clip"] = clip?.m_Name,
+                    ["clipUnloaded"] = unloaded,
                     ["frames"] = stateFrames[^1],
                     ["loop"] = clip?.m_MuscleClip?.m_LoopTime ?? false,
                     ["speed"] = state.m_Speed,

@@ -1428,8 +1428,9 @@ def register():
     bpy.types.Scene.anime_studio_combo = StringProperty(
         name="Combo",
         description=("The steps, separated by spaces. Inputs as on the buttons, several at once "
-                     "joined by +, a parameter as Name=value (e.g. Int_BranchIndex=1), and "
-                     "wait to let the current clip play out"),
+                     "joined by +, a parameter as Name=value (e.g. Int_BranchIndex=1), wait to "
+                     "let the current clip play out, wait:120 to let 120 frames pass "
+                     "(e.g. Int_MoveType=0 Bool_IsMoving=1 wait:256 Bool_IsMoving=0 for walking)"),
     )
     bpy.types.Scene.anime_studio_combo_start = StringProperty(
         name="Start state",

@@ -10,6 +10,7 @@ A combo is a list of steps separated by spaces:
     PressAttackA+PerfectEvade   several inputs in the same moment
     Int_BranchIndex=1       set a parameter from here on (Bool: 0 or 1)
     wait                    let the current clip play out
+    wait:120                let 120 frames pass, e.g. walking while Bool_IsMoving=1
 
 Every input is given at the earliest frame the controller accepts it, like a perfect
 player. Clips that follow on their own, like an attack's _End clip or the way back to
@@ -104,6 +105,13 @@ class Graph:
         for token in text.split():
             if token.lower() == "wait":
                 steps.append(("wait", {}, set()))
+                continue
+            if token.lower().startswith("wait:"):
+                try:
+                    frames = int(token[5:])
+                except ValueError:
+                    raise ComboError(f"{token}: give the frames as a whole number, e.g. wait:120")
+                steps.append(("frames", {"": max(0, frames)}, set()))
                 continue
             values, triggers = {}, set()
             for part in token.split("+"):
@@ -302,21 +310,42 @@ class _Run:
             raise ComboError(f"{label} is not possible from {began}")
         raise ComboError(f"{label} is not possible from {began} or what follows it (up to {ended})")
 
-    def settle(self):
-        """Lets automatic transitions run until a state just keeps playing."""
+    def advance(self, frames):
+        """Lets `frames` frames pass, taking whatever transitions fire on their own."""
+        end = self.entered + self.local + frames
         guard = 0
-        limit = self.limit()
-        while guard < 200:
+        while self.entered + self.local < end and guard < 10000:
             fired = self.ready()
             if fired is not None:
                 t, state, used = fired
                 self.take(t, state, used, "follows on its own")
-                limit = self.limit()
                 guard += 1
                 continue
             self.local += 1
+
+    def settle(self):
+        """Lets automatic transitions run until a state just keeps playing.
+
+        A state that comes round again would repeat for good -- a walk cycle while
+        Bool_IsMoving is still on -- so the run stops there instead and says so.
+        """
+        seen = {self.state}
+        limit = self.limit()
+        while True:
+            fired = self.ready()
+            if fired is not None:
+                t, state, used = fired
+                if state in seen:
+                    name = self.g.states[state]["name"]
+                    return [f"{name} would repeat on its own, so the combo ends there. "
+                            f"Set the value that keeps it going back to stop it, e.g. Bool_IsMoving=0"]
+                seen.add(state)
+                self.take(t, state, used, "follows on its own")
+                limit = self.limit()
+                continue
+            self.local += 1
             if self.local > limit:
-                return
+                return []
 
 
 def play(graph, text, start="", lead_in=0, settle=True):
@@ -330,14 +359,17 @@ def play(graph, text, start="", lead_in=0, settle=True):
     run.local = max(0, int(lead_in))
     notes = []
     for kind, values, triggers in steps:
+        if kind == "frames":
+            run.advance(values[""])
+            continue
         run.values.update(values)
         if kind == "wait":
-            run.settle()
+            notes += run.settle()
         elif kind == "input":
             label = "+".join(sorted(n.replace("Trigger_", "") for n in triggers))
             notes += run.press(triggers, label)
     if settle:
-        run.settle()
+        notes += run.settle()
     return run.segments, notes
 
 

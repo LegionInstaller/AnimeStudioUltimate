@@ -48,6 +48,11 @@ More in the text field:
 - `PressEvade PressAttackA+PerfectEvade`: two inputs in the same moment, joined by `+`.
 - `Int_BranchIndex=1`: set a value from that point on, here the ExSpecial instead of the Special.
 - `wait`: let the current clip play out before the next input.
+- `wait:256`: let 256 frames pass. Needed for things the game drives with an on/off value instead of a button, like walking.
+
+Walking, for example the TerrorBird: `Int_MoveType=0 Bool_IsMoving=1 wait:256 Bool_IsMoving=0`. That's Idle into Walk (15 frames blend), two steps, then back to Idle (6 frames blend). Like in the game, the bird always finishes its step before it stops, even if you set `Bool_IsMoving=0` in the middle of one. `Int_MoveType` decides between walking (0) and running (1); the TerrorBird's controller starts on 1. If nothing turns the value off again, the combo ends where the walk would repeat forever and says so.
+
+Each step is its own strip, and every strip starts its root motion from the beginning again. A walk of several steps therefore jumps back at each new step. Remove the root motion (see above) and move the object yourself if you need it to cover ground.
 
 If an input isn't possible at that point (for example a move the character can't do from where it is), the add-on says where the chain broke off.
 

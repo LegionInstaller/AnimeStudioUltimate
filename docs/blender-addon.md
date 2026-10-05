@@ -52,7 +52,7 @@ More in the text field:
 
 Walking, for example the TerrorBird: `Int_MoveType=0 Bool_IsMoving=1 wait:256 Bool_IsMoving=0`. That's Idle into Walk (15 frames blend), two steps, then back to Idle (6 frames blend). Like in the game, the bird always finishes its step before it stops, even if you set `Bool_IsMoving=0` in the middle of one. `Int_MoveType` decides between walking (0) and running (1); the TerrorBird's controller starts on 1. If nothing turns the value off again, the combo ends where the walk would repeat forever and says so.
 
-Each step is its own strip, and every strip starts its root motion from the beginning again. A walk of several steps therefore jumps back at each new step. Remove the root motion (see above) and move the object yourself if you need it to cover ground.
+Each clip is its own strip, and every clip starts its root motion from its own beginning. "Carry root motion" (on by default) makes up for that: it moves the whole character along with the clips, so walks and attack chains cover ground like in the game instead of jumping back at every new clip. Only the ground is carried, so jumps still land. The movement sits on its own NLA track, "AS| carry root motion", on the topmost object of the character. The message after Build Combo says how far the character got.
 
 If an input isn't possible at that point (for example a move the character can't do from where it is), the add-on says where the chain broke off.
 

@@ -27,6 +27,7 @@ inputs through the game's animator and lays the clips out on NLA tracks with the
 own timing (see combo.py).
 """
 
+import math
 import os
 import re
 
@@ -60,6 +61,9 @@ _RNA_TO_ID_TYPE = {"Object": 'OBJECT', "Key": 'KEY', "Material": 'MATERIAL'}
 # NLA tracks this add-on made carry this prefix, so a second click replaces them instead
 # of stacking a duplicate on top.
 _NLA_MARK = "AS| "
+
+# The track on the root object that moves a combo along with the clips' root motion.
+_CARRY = _NLA_MARK + "carry root motion"
 
 # Dynamic enum items must stay referenced or Blender frees the strings mid-draw.
 _enum_cache = []
@@ -603,7 +607,20 @@ def _clear_our_tracks(adt, takes):
     stale = [t for t in adt.nla_tracks
              if t.name.startswith(_NLA_MARK) or t.name in takes]
     for track in stale:
+        if track.name == _CARRY:
+            _restore_carried(adt.id_data, track)
         adt.nla_tracks.remove(track)
+
+
+def _clear_carry(scan):
+    """Drops a combo's carry track from the root object when the scan doesn't cover it.
+
+    On a merge export the root is an empty without clips of its own, so clearing the
+    animated data-blocks never reaches it.
+    """
+    root = scan.root
+    if root is not None and root not in scan.per_id and root.animation_data:
+        _clear_our_tracks(root.animation_data, ())
 
 
 def set_take_combined(take, obj=None, words=None):
@@ -627,6 +644,7 @@ def set_take_combined(take, obj=None, words=None):
     if isinstance(take, int):
         take = scan.bases[take]
     group = scan.group_of(take, words)
+    _clear_carry(scan)
 
     strips, touched, missing = 0, 0, []
     for data in scan.per_id:
@@ -668,6 +686,7 @@ def set_take_combined(take, obj=None, words=None):
 def push_all_takes_to_nla(obj=None):
     """Puts every take on its own NLA track, so all of them stay visible at once."""
     scan = Scan(obj or bpy.context.object)
+    _clear_carry(scan)
     pushed = 0
     for data in scan.per_id:
         if not data.animation_data:
@@ -710,7 +729,7 @@ def _take_for_clip(scan, clip):
     return clip if clip and clip in scan.takes else None
 
 
-def build_combo(obj, graph, segments, origin=1):
+def build_combo(obj, graph, segments, origin=1, carry=True):
     """Lays the played-out combo onto NLA tracks of every animated data-block.
 
     One track per clip, each above the one before, so the newer clip takes over after its
@@ -718,12 +737,15 @@ def build_combo(obj, graph, segments, origin=1):
     which is what the game does: the old clip keeps moving under the new one while they
     blend. The body's layered clips (face, outfit) come along on their own tracks.
 
+    With `carry` the character also keeps the ground each clip covered, see
+    carry_root_motion().
+
     Nothing is touched unless every clip the combo needs is there: a combo with holes
     looks like a broken animation rather than a missing file. In that case nothing is
     placed and the clips are returned instead.
 
     Returns (clips placed, clips missing from the FBX, states whose clip AnimeStudio had
-    not loaded when it exported).
+    not loaded when it exported, distance carried or None).
     """
     scan = Scan(obj)
     plan, missing, unloaded = [], [], []
@@ -742,10 +764,11 @@ def build_combo(obj, graph, segments, origin=1):
             else:
                 plan.append((index, seg, state, take))
     if missing or unloaded:
-        return 0, missing, sorted(set(unloaded))
+        return 0, missing, sorted(set(unloaded)), None
 
     scale = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base / graph.rate
     placed = 0
+    _clear_carry(scan)
     for data in scan.per_id:
         if not data.animation_data:
             data.animation_data_create()
@@ -753,13 +776,15 @@ def build_combo(obj, graph, segments, origin=1):
         _clear_our_tracks(data.animation_data, scan.takes)
 
     last_frame = origin
+    body = {}                   # armature -> its body strip of every clip
     for index, seg, state, take in plan:
         start = origin + (seg.start - seg.offset) * scale
         blend = seg.blend * scale
         wrote = False
         for data in scan.per_id:
             adt = data.animation_data
-            for part in scan.group_of(take):
+            parts = scan.group_of(take)
+            for part in parts:
                 action, _ = scan.action_for(data, part)
                 if action is None:
                     continue
@@ -779,6 +804,8 @@ def build_combo(obj, graph, segments, origin=1):
                 strip.blend_in = min(blend, max(length - 1, 0))
                 if slot is not None and hasattr(strip, "action_slot"):
                     strip.action_slot = slot
+                if part == parts[0] and data in scan.armatures:
+                    body.setdefault(data, []).append(strip)
                 last_frame = max(last_frame, strip.frame_end)
                 wrote = True
         placed += wrote
@@ -786,7 +813,162 @@ def build_combo(obj, graph, segments, origin=1):
     scene = bpy.context.scene
     scene.frame_start = origin
     scene.frame_end = int(last_frame)
-    return placed, [], []
+
+    carried = None
+    # Only an armature that plays every clip of the combo tells the whole way.
+    whole = [arm for arm, strips in body.items() if len(strips) == len(plan)]
+    if carry and whole and len(plan) > 1:
+        carried = carry_root_motion(scan.root, whole[0], body[whole[0]], origin, int(last_frame))
+    return placed, [], [], carried
+
+
+def _influence(strip, frame):
+    """How much of `strip` the NLA lets through at `frame`, its blend-in included."""
+    if frame < strip.frame_start:
+        return 0.0
+    if strip.blend_in <= 0:
+        return 1.0
+    return min(1.0, (frame - strip.frame_start) / strip.blend_in)
+
+
+def _showing(strips, top, frame):
+    """[(index, influence)] of the strips up to `top` that show at `frame`, top first.
+
+    Stops at the first one that covers everything below it, so the list stays short.
+    """
+    out = []
+    for index in range(top, -1, -1):
+        weight = 1.0 if index == 0 else _influence(strips[index], frame)
+        if weight > 0:
+            out.append((index, weight))
+        if weight >= 1:
+            break
+    return out
+
+
+def _mix(showing, value):
+    """What the NLA makes of the strips in `showing`: each one over the mix below it."""
+    mixed = value(showing[-1][0])
+    for index, weight in reversed(showing[:-1]):
+        mixed = mixed.lerp(value(index), weight)
+    return mixed
+
+
+def carry_root_motion(root, arm, strips, first, last):
+    """Moves the character along with the clips' root motion, so a combo covers ground.
+
+    Every strip plays its clip's travel from where that clip starts, so the NLA alone pulls
+    the character back at each new clip. Here every clip gets an offset that puts it where
+    the clips below it have got to, and the root object is keyed with the very blend the
+    NLA uses, so the offsets cross-fade exactly as the clips do.
+
+    The offset is matched over the whole blend, not at its first frame. The game moves by
+    the blended steps of both clips; matching the mean distance between the two over the
+    blend lands the new clip where those steps would have taken it.
+
+    Only the ground is carried. The height stays with the clips, so a jump still lands.
+
+    `strips` are the body strips of `arm`, one per clip, bottom track first. Returns the
+    distance carried, or None when no bone carries the figure.
+    """
+    scene = bpy.context.scene
+    adt = arm.animation_data
+    keep_frame, keep_nla = scene.frame_current, adt.use_nla
+
+    windows = {}
+    need = {}                   # action -> its frames that are measured
+    for index in range(1, len(strips)):
+        strip = strips[index]
+        start = int(strip.frame_start)
+        windows[index] = range(start, start + math.ceil(strip.blend_in) + 1)
+        for frame in windows[index]:
+            for shown, _ in [(index, 1.0)] + _showing(strips, index - 1, frame):
+                below = strips[shown]
+                local = min(below.action_frame_start + frame - below.frame_start,
+                            below.action_frame_end)
+                need.setdefault(below.action, set()).add(local)
+
+    # Measured on each clip alone, with the NLA off, in the armature's own space.
+    bone, at = None, {}
+    adt.use_nla = False
+    try:
+        for action in need:
+            if bone is None and _assign(arm, action):
+                bone = _carrier(arm, *(int(round(v)) for v in action.frame_range))
+        for action, frames in need.items():
+            if bone is None or not _assign(arm, action):
+                break
+            pose = arm.pose.bones[bone]
+            for local in sorted(frames):
+                scene.frame_set(int(local), subframe=local - int(local))
+                at[action, local] = pose.matrix.translation.copy()
+    finally:
+        adt.action = None
+        adt.use_nla = keep_nla
+        scene.frame_set(keep_frame)
+    if len(at) < sum(len(f) for f in need.values()):
+        return None
+
+    def position(index, frame):
+        strip = strips[index]
+        local = min(strip.action_frame_start + frame - strip.frame_start, strip.action_frame_end)
+        return at[strip.action, local]
+
+    offsets = [Vector((0.0, 0.0, 0.0))]
+    for index in range(1, len(strips)):
+        gap = Vector((0.0, 0.0, 0.0))
+        for frame in windows[index]:
+            below = _mix(_showing(strips, index - 1, frame),
+                         lambda i: position(i, frame) + offsets[i])
+            gap += below - position(index, frame)
+        offsets.append(gap / len(windows[index]))
+
+    # The offsets are in the armature's space; the root moves in the world, on the ground.
+    to_world = arm.matrix_world.to_3x3()
+    base = root.location.copy()
+    path = []
+    for frame in range(first, last + 1):
+        shift = to_world @ _mix(_showing(strips, len(strips) - 1, frame), lambda i: offsets[i])
+        shift.z = 0.0
+        path.append((frame, base + shift))
+
+    root_adt = root.animation_data or root.animation_data_create()
+    previous = root_adt.action
+    action = bpy.data.actions.new(_CARRY)
+    root_adt.action = action
+    for k, (frame, value) in enumerate(path):
+        # Only where the value turns: the keys are linear, so that is the same curve.
+        if 0 < k < len(path) - 1 and (value - path[k - 1][1]).length < 1e-6 \
+                and (value - path[k + 1][1]).length < 1e-6:
+            continue
+        root.location = value
+        root.keyframe_insert("location", frame=frame)
+    slot = getattr(root_adt, "action_slot", None)
+    root_adt.action = previous
+    root.location = base
+    for curve in _curves(action):
+        for key in curve.keyframe_points:
+            key.interpolation = 'LINEAR'
+
+    nla = root_adt.nla_tracks.new()
+    nla.name = _CARRY
+    strip = nla.strips.new("carry", first, action)
+    strip.blend_type = 'REPLACE'
+    strip.extrapolation = 'HOLD'
+    if slot is not None and hasattr(strip, "action_slot"):
+        strip.action_slot = slot
+    return (path[-1][1] - base).length
+
+
+def _restore_carried(owner, track):
+    """Puts the object back where a carry track starts, before the track is removed.
+
+    Otherwise it stays wherever the last evaluated frame left it.
+    """
+    for strip in track.strips:
+        for curve in _curves(strip.action) if strip.action else ():
+            if curve.data_path == "location" and len(curve.keyframe_points):
+                owner.location[curve.array_index] = curve.keyframe_points[0].co[1]
 
 
 def _short(clip):
@@ -1247,7 +1429,8 @@ class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        placed, missing, unloaded = build_combo(context.object, graph, segments)
+        placed, missing, unloaded, carried = build_combo(context.object, graph, segments,
+                                                         carry=scene.anime_studio_combo_carry)
         print(f"Combo on {graph.controller}: {scene.anime_studio_combo or '(no input)'}")
         for line in combo.describe(graph, segments):
             print("  " + line)
@@ -1275,6 +1458,10 @@ class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
             return {'CANCELLED'}
 
         msg = f"{placed} clip(s) laid out, frames {scene.frame_start}-{scene.frame_end}"
+        if carried is not None:
+            msg += f", carried {carried:.2f} m"
+        elif scene.anime_studio_combo_carry and placed > 1:
+            msg += ", no root motion found to carry"
         if notes:
             msg += f"  ({notes[0]})"
         self.report({'INFO'}, msg)
@@ -1380,6 +1567,7 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
         row.prop(scene, "anime_studio_combo_start", text="Start")
         row.prop(scene, "anime_studio_combo_lead", text="Idle")
         box.prop(scene, "anime_studio_combo_settle")
+        box.prop(scene, "anime_studio_combo_carry")
         box.operator(ANIMESTUDIO_OT_combo_build.bl_idname, icon='NLA_PUSHDOWN')
 
 
@@ -1451,9 +1639,17 @@ def register():
         description="Also offer the triggers the game sets itself, like Hit or Switch_In",
         default=False,
     )
+    bpy.types.Scene.anime_studio_combo_carry = BoolProperty(
+        name="Carry root motion",
+        description=("Move the whole character along with the ground each clip covers, so "
+                     "walks and attack chains travel like in the game instead of jumping back "
+                     "at every new clip. Only the ground is carried, jumps still land"),
+        default=True,
+    )
 
 
 def unregister():
+    del bpy.types.Scene.anime_studio_combo_carry
     del bpy.types.Scene.anime_studio_combo_all
     del bpy.types.Scene.anime_studio_combo_settle
     del bpy.types.Scene.anime_studio_combo_lead

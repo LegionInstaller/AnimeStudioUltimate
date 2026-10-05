@@ -1641,10 +1641,11 @@ def register():
     )
     bpy.types.Scene.anime_studio_combo_carry = BoolProperty(
         name="Carry root motion",
-        description=("Move the whole character along with the ground each clip covers, so "
-                     "walks and attack chains travel like in the game instead of jumping back "
-                     "at every new clip. Only the ground is carried, jumps still land"),
-        default=True,
+        description=("Move the whole character along with the ground each clip covers. For "
+                     "walks and runs, which the game moves through the world, so they don't jump "
+                     "back at every step. Leave it off for attacks: the game plays those from the "
+                     "character's spot. Only the ground is carried, jumps still land"),
+        default=False,
     )
 
 

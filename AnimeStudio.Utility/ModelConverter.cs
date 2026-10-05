@@ -460,6 +460,34 @@ namespace AnimeStudio
 
             if (meshR is SkinnedMeshRenderer sMesh)
             {
+                // Unity skins with bone * bind pose and never looks at the renderer's own
+                // transform, so a prefab may move that object without the game showing it
+                // (Miyabi's katana hilt sits 3.8 m off). The FBX places the mesh by its node,
+                // so where all bones agree on another place, the vertices and bind poses are
+                // moved there -- where the game draws them.
+                var bindPoses = mesh.m_BindPose;
+                var bindFix = BindPlacement(sMesh, mesh);
+                if (bindFix.HasValue)
+                {
+                    var fix = bindFix.Value;
+                    foreach (var vertex in iMesh.VertexList)
+                    {
+                        vertex.Vertex = FromNumerics(System.Numerics.Vector3.Transform(ToNumerics(vertex.Vertex), fix));
+                        if (iMesh.hasNormal)
+                            vertex.Normal = FromNumerics(System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(ToNumerics(vertex.Normal), fix)));
+                        if (iMesh.hasTangent)
+                        {
+                            var t = FromNumerics(System.Numerics.Vector3.Normalize(System.Numerics.Vector3.TransformNormal(
+                                new System.Numerics.Vector3(vertex.Tangent.X, vertex.Tangent.Y, vertex.Tangent.Z), fix)));
+                            vertex.Tangent = new Vector4(t.X, t.Y, t.Z, vertex.Tangent.W);
+                        }
+                    }
+                    // the bind poses follow the vertices: v' * bp' = v * bp
+                    var mirror = System.Numerics.Matrix4x4.CreateScale(-1, 1, 1);
+                    System.Numerics.Matrix4x4.Invert(mirror * fix * mirror, out var undo);
+                    bindPoses = mesh.m_BindPose.Select(bp => FromNumerics(undo * ToNumerics(bp))).ToArray();
+                }
+
                 //Bone
                 /*
                  * 0 - None
@@ -516,7 +544,7 @@ namespace AnimeStudio
                             bone.Path = GetTransformPath(m_Transform);
                         }
                         var convert = Matrix4x4.Scale(new Vector3(-1, 1, 1));
-                        bone.Matrix = convert * mesh.m_BindPose[i] * convert;
+                        bone.Matrix = convert * bindPoses[i] * convert;
                         iMesh.BoneList.Add(bone);
                     }
                 }
@@ -531,7 +559,7 @@ namespace AnimeStudio
                         var path = GetPathFromHash(boneHash);
                         bone.Path = FixBonePath(path);
                         var convert = Matrix4x4.Scale(new Vector3(-1, 1, 1));
-                        bone.Matrix = convert * mesh.m_BindPose[i] * convert;
+                        bone.Matrix = convert * bindPoses[i] * convert;
                         iMesh.BoneList.Add(bone);
                     }
                 }
@@ -596,16 +624,18 @@ namespace AnimeStudio
                                 var sourceVertex = iMesh.VertexList[(int)morphVertex.index];
                                 destVertex.Vertex = new ImportedVertex();
                                 var morphPos = morphVertex.vertex;
-                                destVertex.Vertex.Vertex = sourceVertex.Vertex + new Vector3(-morphPos.X, morphPos.Y, morphPos.Z);
+                                // the deltas turn with a mesh moved to its bind placement
+                                destVertex.Vertex.Vertex = sourceVertex.Vertex + Turn(new Vector3(-morphPos.X, morphPos.Y, morphPos.Z), bindFix);
                                 if (shape.hasNormals)
                                 {
                                     var morphNormal = morphVertex.normal;
-                                    destVertex.Vertex.Normal = new Vector3(-morphNormal.X, morphNormal.Y, morphNormal.Z);
+                                    destVertex.Vertex.Normal = Turn(new Vector3(-morphNormal.X, morphNormal.Y, morphNormal.Z), bindFix);
                                 }
                                 if (shape.hasTangents)
                                 {
                                     var morphTangent = morphVertex.tangent;
-                                    destVertex.Vertex.Tangent = new Vector4(-morphTangent.X, morphTangent.Y, morphTangent.Z, 0);
+                                    var t = Turn(new Vector3(-morphTangent.X, morphTangent.Y, morphTangent.Z), bindFix);
+                                    destVertex.Vertex.Tangent = new Vector4(t.X, t.Y, t.Z, 0);
                                 }
                             }
                         }
@@ -705,6 +735,94 @@ namespace AnimeStudio
 
         private readonly Dictionary<string, string> bonePathCache =
             new Dictionary<string, string>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Where a skinned mesh's bind poses put it, when that is not where its renderer
+        /// stands: the move from there into the renderer's space, in the exported (X mirrored)
+        /// space, as a row-vector matrix. Null when the renderer is right, when the bones that
+        /// carry weights don't agree on one place (a prefab saved away from its bind pose) or
+        /// when one of them can't be resolved.
+        /// </summary>
+        private static System.Numerics.Matrix4x4? BindPlacement(SkinnedMeshRenderer sMesh, Mesh mesh)
+        {
+            if (mesh.m_Skin == null || mesh.m_Skin.Count == 0 || mesh.m_BindPose == null
+                || sMesh.m_Bones.Count != mesh.m_BindPose.Length
+                || !sMesh.m_GameObject.TryGet(out var m_GameObject) || m_GameObject.m_Transform == null)
+                return null;
+            var weighted = new HashSet<int>();
+            foreach (var influence in mesh.m_Skin)
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    if (influence.weight[k] > 0)
+                        weighted.Add(influence.boneIndex[k]);
+                }
+            }
+            System.Numerics.Matrix4x4? placed = null;
+            foreach (var i in weighted)
+            {
+                if (i < 0 || i >= sMesh.m_Bones.Count || !sMesh.m_Bones[i].TryGet(out var bone))
+                    return null;
+                // p_world = p_mesh * bind pose * bone; the bind poses as read are row-vector
+                var at = ToNumerics(mesh.m_BindPose[i]) * WorldOf(bone);
+                if (placed == null)
+                    placed = at;
+                else if (!Near(placed.Value, at))
+                    return null;
+            }
+            if (placed == null)
+                return null;
+            var renderer = WorldOf(m_GameObject.m_Transform);
+            if (Near(placed.Value, renderer))
+                return null;
+            System.Numerics.Matrix4x4.Invert(renderer, out var toRenderer);
+            var mirror = System.Numerics.Matrix4x4.CreateScale(-1, 1, 1);
+            Logger.Info($"{m_GameObject.m_Name}: its bones place it {(placed.Value.Translation - renderer.Translation).Length():F3} m away from its renderer's transform; exported where the game draws it");
+            return mirror * (placed.Value * toRenderer) * mirror;
+        }
+
+        /// <summary>A transform's world matrix in Unity's space, row-vector.</summary>
+        private static System.Numerics.Matrix4x4 WorldOf(Transform transform)
+        {
+            var p = transform.m_LocalPosition;
+            var r = transform.m_LocalRotation;
+            var s = transform.m_LocalScale;
+            var local = System.Numerics.Matrix4x4.CreateScale(s.X, s.Y, s.Z)
+                * System.Numerics.Matrix4x4.CreateFromQuaternion(new System.Numerics.Quaternion(r.X, r.Y, r.Z, r.W))
+                * System.Numerics.Matrix4x4.CreateTranslation(p.X, p.Y, p.Z);
+            return transform.m_Father.TryGet(out var father) ? local * WorldOf(father) : local;
+        }
+
+        private static bool Near(System.Numerics.Matrix4x4 a, System.Numerics.Matrix4x4 b)
+        {
+            var d = a - b;
+            return Math.Abs(d.M11) + Math.Abs(d.M12) + Math.Abs(d.M13) + Math.Abs(d.M21) + Math.Abs(d.M22) + Math.Abs(d.M23)
+                + Math.Abs(d.M31) + Math.Abs(d.M32) + Math.Abs(d.M33) < 3e-3
+                && (a.Translation - b.Translation).Length() < 1e-3f * Math.Max(1f, a.Translation.Length());
+        }
+
+        private static Vector3 Turn(Vector3 v, System.Numerics.Matrix4x4? fix) =>
+            fix.HasValue ? FromNumerics(System.Numerics.Vector3.TransformNormal(ToNumerics(v), fix.Value)) : v;
+
+        private static System.Numerics.Vector3 ToNumerics(Vector3 v) => new System.Numerics.Vector3(v.X, v.Y, v.Z);
+
+        private static Vector3 FromNumerics(System.Numerics.Vector3 v) => new Vector3(v.X, v.Y, v.Z);
+
+        private static System.Numerics.Matrix4x4 ToNumerics(Matrix4x4 m) => new System.Numerics.Matrix4x4(
+            m.M00, m.M01, m.M02, m.M03,
+            m.M10, m.M11, m.M12, m.M13,
+            m.M20, m.M21, m.M22, m.M23,
+            m.M30, m.M31, m.M32, m.M33);
+
+        private static Matrix4x4 FromNumerics(System.Numerics.Matrix4x4 m)
+        {
+            var r = new Matrix4x4();
+            r.M00 = m.M11; r.M01 = m.M12; r.M02 = m.M13; r.M03 = m.M14;
+            r.M10 = m.M21; r.M11 = m.M22; r.M12 = m.M23; r.M13 = m.M24;
+            r.M20 = m.M31; r.M21 = m.M32; r.M22 = m.M33; r.M23 = m.M34;
+            r.M30 = m.M41; r.M31 = m.M42; r.M32 = m.M43; r.M33 = m.M44;
+            return r;
+        }
 
         private static string GetTransformPathByFather(Transform transform)
         {

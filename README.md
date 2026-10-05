@@ -8,7 +8,10 @@ Downloads are on the [Releases](../../releases) page: GUI and CLI for .NET 9 and
 - ZZZ animations decode, facial ones included. It uses the patched ACL decoder from the `feat/acl_fix` branch, with the missing part for facial tracks filled in.
 - Faster. Loading game files takes about a third of the time, and an FBX export with 20 heavy animations went from 122 s to under 3 s. Same output as upstream.
 - 3DMigoto / ZZMI mods: Export > Replace meshes from a 3DMigoto mod exports the character with the mod's meshes and textures. It only reads the mod folder.
-- Skinned parts the game moved around in its prefab now land where the game draws them. Miyabi's sword hilt used to end up 4 m under her feet and stretched in every pose.
+- Skinned parts the game moved around in its prefab now land where the game draws them. Miyabi's sword hilt used to end up 3.8 m below where it belongs and stretched in every pose.
+
+  <img src="docs/images/miyabi-hilt-before-after.jpg" width="480" alt="Miyabi's sword hilt before and after the fix">
+
 - Model exports with animations also write the character's animator graph as `.animator.json` next to the FBX, which clip follows which and when.
 - The Asset Browser only loads the files you picked and frees the last load first, without freezing the window.
 - Blender add-on (in Releases, source in `tools/blender/anime_studio_takes`):

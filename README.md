@@ -1,28 +1,28 @@
 # AnimeStudio Ultimate
 
-A fork of [Escartem/AnimeStudio](https://github.com/Escartem/AnimeStudio) focused on **Zenless Zone Zero**, based on upstream master `1ccfbc1` (2026-08-12). Everything below the line is the original upstream README.
+Fork of [AnimeStudio](https://github.com/Escartem/AnimeStudio) for Zenless Zone Zero.
+Downloads are on the [Releases](../../releases) page: GUI and CLI for .NET 9 and 10, plus the Blender add-on.
 
-Download: see [Releases](../../releases) (GUI + CLI for .NET 9 and .NET 10, plus the Blender add-on).
+## Changes
 
-What's different from upstream:
+- ZZZ animations decode, facial ones included. It uses the patched ACL decoder from the `feat/acl_fix` branch, with the missing part for facial tracks filled in.
+- Faster. Loading game files takes about a third of the time, and an FBX export with 20 heavy animations went from 122 s to under 3 s. Same output as upstream.
+- 3DMigoto / ZZMI mods: Export > Replace meshes from a 3DMigoto mod exports the character with the mod's meshes and textures. It only reads the mod folder.
+- Skinned parts the game moved around in its prefab now land where the game draws them. Miyabi's sword hilt used to end up 4 m under her feet and stretched in every pose.
+- Model exports with animations also write the character's animator graph as `.animator.json` next to the FBX, which clip follows which and when.
+- The Asset Browser only loads the files you picked and frees the last load first, without freezing the window.
+- Blender add-on (in Releases, source in `tools/blender/anime_studio_takes`):
+  - switch a whole take at once, armature and all shape keys
+  - build combos from the animator graph: type in inputs like `PressAttackA PressAttackA PressAttackA` and it lines up the clips the way the game plays them, moving the character along with its root motion
+  - remove root motion from a clip or from all takes
+- Lots of smaller loader, map and export fixes.
 
-- ZZZ ACL animations actually decode. Uses the ACL 2.1.0 tree with the HoYo patch from upstream's `feat/acl_fix` branch, including the database scalar tracks, so facial blend shapes work too.
-- Animation export is a lot faster on big clips (up to ~44x), same output as before.
-- 3DMigoto / ZZMI mesh replacement: export a character with a mod's meshes and textures instead of the original ones. It just reads the mod folder from disk, nothing gets injected into the game.
-- Blender add-on in `tools/blender/anime_studio_takes`: switch whole takes (armature + shape keys) at once, play body/face/outfit clips together, remove root motion.
-- Various loader, map and exporter fixes.
+More in the docs: [ZZZ animations](docs/zzz-animations.md), [mod meshes](docs/migoto-mesh-replacement.md), [Blender add-on](docs/blender-addon.md), [combos](docs/zzz-animator-controllers.md), [fixes](docs/loader-fixes.md), [performance](docs/performance.md).
 
-More detail in [`docs/`](docs):
-[ZZZ animations](docs/zzz-animations.md),
-[3DMigoto mesh replacement](docs/migoto-mesh-replacement.md),
-[Blender add-on](docs/blender-addon.md),
-[rebuilding combos in Blender](docs/zzz-animator-controllers.md),
-[fixes](docs/loader-fixes.md),
-[performance](docs/performance.md).
+Not affiliated with HoYoverse, no game files in here.
+Thanks to everyone who worked on AnimeStudio (see below) and to Nicholas Frechette for [ACL](https://github.com/nfrechette/acl).
 
-Not affiliated with HoYoverse. The repository contains no game assets.
-
-Credits: the upstream AnimeStudio authors and contributors (see below and `LICENSE`), and [ACL](https://github.com/nfrechette/acl) by Nicholas Frechette (MIT).
+The original AnimeStudio readme follows.
 
 ---
 

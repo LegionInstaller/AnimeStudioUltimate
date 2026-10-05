@@ -475,6 +475,8 @@ class Scan:
         for track in adt.nla_tracks:
             actions.extend(strip.action for strip in track.strips if strip.action)
         for action in actions:
+            if action.name.startswith(_CARRY):
+                continue                        # a combo's movement, not a clip
             found.setdefault(_take_of(action.name, data.name), action)
 
     def _channels(self):
@@ -607,9 +609,15 @@ def _clear_our_tracks(adt, takes):
     stale = [t for t in adt.nla_tracks
              if t.name.startswith(_NLA_MARK) or t.name in takes]
     for track in stale:
+        carried = []
         if track.name == _CARRY:
             _restore_carried(adt.id_data, track)
+            carried = [s.action for s in track.strips if s.action]
         adt.nla_tracks.remove(track)
+        # The carry action was made for this one combo; left behind it piles up as .001, .002
+        for action in carried:
+            if action.users == 0:
+                bpy.data.actions.remove(action)
 
 
 def _clear_carry(scan):

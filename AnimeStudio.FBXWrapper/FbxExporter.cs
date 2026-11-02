@@ -142,7 +142,34 @@ namespace AnimeStudio.FbxInterop
                 }
             }
 
+            FillBoneGaps(_imported.RootFrame, bonePaths, false);
+
             SetJointsNode(_imported.RootFrame, bonePaths, _exportOptions.castToBone);
+        }
+
+        // A node between two bones that no mesh is skinned to (Ye Shunguang's "Bip001 Prop3" over
+        // her sword bone) becomes a bone too. Written as a plain node it splits the skeleton, and
+        // Blender's importer then fails on the bones below it (KeyError on the armature).
+        // A node is written as a bone when it is in bonePaths or the parent of one (BoneInPath
+        // makes the parent a bone as well). Returns whether the frame or anything below is a bone.
+        private bool FillBoneGaps(ImportedFrame frame, HashSet<string> bonePaths, bool underBone)
+        {
+            var isBone = bonePaths.Contains(frame.Path);
+            for (var i = 0; i < frame.Count && !isBone; i++)
+            {
+                isBone = bonePaths.Contains(frame[i].Path);
+            }
+            var boneBelow = false;
+            for (var i = 0; i < frame.Count; i++)
+            {
+                boneBelow |= FillBoneGaps(frame[i], bonePaths, underBone || isBone);
+            }
+            if (!isBone && underBone && boneBelow && ImportedHelpers.FindMesh(frame.Path, _imported.MeshList) == null)
+            {
+                bonePaths.Add(frame.Path);
+                isBone = true;
+            }
+            return isBone || boneBelow;
         }
 
         private void SetJointsNode(ImportedFrame rootFrame, HashSet<string> bonePaths, bool castToBone)

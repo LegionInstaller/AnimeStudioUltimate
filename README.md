@@ -18,6 +18,7 @@ Downloads are on the [Releases](../../releases) page: GUI and CLI for .NET 9 and
   - switch a whole take at once, armature and all shape keys
   - build combos from the animator graph: type in inputs like `PressAttackA PressAttackA PressAttackA` and it lines up the clips the way the game plays them, moving the character along with its root motion
   - remove root motion from a clip or from all takes
+  - switch the variants of a mod export with buttons, like the mod's keys do in the game
 - Lots of smaller loader, map and export fixes.
 
 More in the docs: [ZZZ animations](docs/zzz-animations.md), [mod meshes](docs/migoto-mesh-replacement.md), [Blender add-on](docs/blender-addon.md), [combos](docs/zzz-animator-controllers.md), [fixes](docs/loader-fixes.md), [performance](docs/performance.md).

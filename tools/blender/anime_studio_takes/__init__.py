@@ -25,8 +25,13 @@ data-block at once.
 With the .animator.json AnimeStudio writes next to the FBX, "Build Combo" plays a list of
 inputs through the game's animator and lays the clips out on NLA tracks with the game's
 own timing (see combo.py).
+
+With the .variants.json AnimeStudio writes next to an FBX that carries every variant of a
+3DMigoto mod as its own mesh, the "Mod Variants" panel has the mod's switches: one click
+shows the meshes and puts in the images of that value (see variants.py).
 """
 
+import json
 import math
 import os
 import re
@@ -35,12 +40,12 @@ import bpy
 from mathutils import Matrix, Vector
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 
-from . import combo
+from . import combo, variants
 
 bl_info = {
     "name": "AnimeStudio Takes",
     "author": "AnimeStudio Ultimate",
-    "version": (1, 7, 0),
+    "version": (1, 8, 0),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar (N) > AnimeStudio",
     "description": "Switch armature and all shape-key actions of an imported FBX take together",
@@ -1476,6 +1481,258 @@ class ANIMESTUDIO_OT_combo_build(bpy.types.Operator):
         return {'FINISHED'}
 
 
+# --------------------------------------------------------------------------------------
+# mod variants
+
+_sheets = {}            # path -> (file time, Sheet)
+_sheet_guesses = {}     # (top object, number of objects) -> the file found for it, or ""
+
+_SHEET_ERRORS = (OSError, ValueError, KeyError, TypeError)
+
+
+def load_sheet(path):
+    """The variant sheet at `path`, read again only when the file changed."""
+    path = bpy.path.abspath(path)
+    stamp = os.path.getmtime(path)
+    cached = _sheets.get(path)
+    if cached is None or cached[0] != stamp:
+        cached = (stamp, variants.Sheet.load(path))
+        _sheets[path] = cached
+    return cached[1]
+
+
+def _variant_owner(objects, obj):
+    """The object the file and the values are kept on: the character's top object."""
+    arm = next((o for o in objects if o.type == 'ARMATURE'), None)
+    return _root_of(arm or obj)
+
+
+def _materials(objects):
+    found = {}
+    for obj in objects:
+        if obj.type == 'MESH':
+            found.update(dict.fromkeys(m for m in obj.data.materials if m is not None))
+    return list(found)
+
+
+def _image_nodes(material):
+    if material.node_tree is None:
+        return []
+    return [n for n in material.node_tree.nodes
+            if n.type == 'TEX_IMAGE' and n.image is not None and n.image.filepath]
+
+
+def _find_sheet(objects):
+    """The .variants.json lying with the character's images that knows the most of its
+    meshes, or "" when none knows any."""
+    folders = {os.path.dirname(bpy.path.abspath(n.image.filepath))
+               for m in _materials(objects) for n in _image_nodes(m)}
+    names = [o.name for o in objects if o.type == 'MESH']
+    best, most = "", 0
+    for folder in sorted(folders):
+        try:
+            files = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for file in files:
+            if not file.lower().endswith(variants.EXTENSION):
+                continue
+            path = os.path.join(folder, file)
+            try:
+                sheet = load_sheet(path)
+            except _SHEET_ERRORS:
+                continue
+            hits = sum(1 for name in names if sheet.mesh(name) is not None)
+            if hits > most:
+                best, most = path, hits
+    return best
+
+
+def _sheet_or_error(owner, objects):
+    """(sheet, path, None), or (None, path, why not). Without any file the why is None."""
+    path = owner.anime_studio_variants
+    if not path:
+        key = (owner.name_full, len(objects))
+        path = _sheet_guesses.get(key)
+        if path is None:
+            path = _sheet_guesses[key] = _find_sheet(objects)
+        if not path:
+            return None, "", None
+    try:
+        return load_sheet(path), path, None
+    except _SHEET_ERRORS as e:
+        return None, path, f"Can't read the file: {e}"
+
+
+def _variant_values(owner, sheet):
+    """The values last set on this character, or None while nothing was set yet."""
+    try:
+        stored = json.loads(owner.anime_studio_variant_values or "null")
+    except ValueError:
+        stored = None
+    if not isinstance(stored, dict):
+        return None
+    values = sheet.defaults()
+    values.update({k: str(v) for k, v in stored.items() if k in values})
+    return values
+
+
+def _image_like(old, path):
+    """The image at `path`, set up like `old`.
+
+    An import keeps the same file once per colour space (colour, and alpha as data), so
+    an image that is already there is only taken when it is set up the same way.
+    """
+    wanted = os.path.normcase(os.path.normpath(path))
+    space, alpha = old.colorspace_settings.name, old.alpha_mode
+    for image in bpy.data.images:
+        if (image.source == 'FILE' and image.colorspace_settings.name == space
+                and image.alpha_mode == alpha and image.library == old.library
+                and os.path.normcase(os.path.normpath(bpy.path.abspath(image.filepath))) == wanted):
+            return image
+    image = bpy.data.images.load(path)      # RuntimeError when the file is not there
+    image.colorspace_settings.name = space
+    image.alpha_mode = alpha
+    return image
+
+
+def _swap_image(material, file, files):
+    """Puts `file` into every image node of the material that shows one of `files`.
+
+    The node is found by the image it shows, so this works with any shader built on top
+    of the import. Returns the file in a list when it is not there to load.
+    """
+    known = {f.lower() for f in files}
+    for node in _image_nodes(material):
+        old = node.image
+        path = bpy.path.abspath(old.filepath)
+        current = os.path.basename(path).lower()
+        if current not in known or current == file.lower():
+            continue
+        try:
+            node.image = _image_like(old, os.path.join(os.path.dirname(path), file))
+        except RuntimeError:
+            return [file]
+    return []
+
+
+def apply_variants(objects, sheet, values):
+    """Shows the meshes and puts in the images that `values` ask for; None shows all.
+
+    Only what the sheet lists is touched. Returns (meshes shown, variant meshes, images
+    that could not be found).
+    """
+    lookup = None if values is None else variants.keyed(values)
+    shown = total = 0
+    for obj in objects:
+        mesh = sheet.mesh(obj.name) if obj.type == 'MESH' else None
+        if mesh is None:
+            continue
+        show = lookup is None or sheet.shows(mesh, lookup)
+        total += 1
+        shown += show
+        obj.hide_render = not show
+        try:
+            obj.hide_set(not show)
+        except RuntimeError:
+            pass    # not in this view layer
+    missing = []
+    if lookup is not None:
+        for material in _materials(objects):
+            entry = sheet.material(material.name)
+            if entry is None:
+                continue
+            for file, files in sheet.images(entry, lookup).values():
+                if file is not None:
+                    missing += _swap_image(material, file, files)
+    return shown, total, sorted(set(missing))
+
+
+class ANIMESTUDIO_OT_variant_set(bpy.types.Operator):
+    bl_idname = "anime_studio.variant_set"
+    bl_label = "Set Variant"
+    bl_description = ("Show the meshes and images of this value, as the mod's key does "
+                      "in the game. Without a variable every one goes back to its start value")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    variable: StringProperty(options={'SKIP_SAVE'})
+    value: StringProperty(options={'SKIP_SAVE'})
+    show_all: BoolProperty(options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        obj = context.object
+        if obj is None:
+            self.report({'ERROR'}, "Select a part of the character")
+            return {'CANCELLED'}
+        objects = _character_objects(obj)
+        owner = _variant_owner(objects, obj)
+        sheet, path, error = _sheet_or_error(owner, objects)
+        if sheet is None:
+            self.report({'ERROR'}, error or "No .variants.json for this character")
+            return {'CANCELLED'}
+
+        values = None
+        if not self.show_all:
+            values = sheet.defaults()
+            if self.variable:
+                if self.variable not in values:
+                    self.report({'ERROR'}, f"The mod has no {self.variable}")
+                    return {'CANCELLED'}
+                values = _variant_values(owner, sheet) or values
+                values[self.variable] = self.value
+        owner.anime_studio_variants = path
+        owner.anime_studio_variant_values = "" if values is None else json.dumps(values)
+
+        shown, total, missing = apply_variants(objects, sheet, values)
+        if missing:
+            self.report({'WARNING'}, "Not found next to the other images: " + ", ".join(missing))
+        else:
+            self.report({'INFO'}, f"{shown} of {total} variant meshes shown")
+        return {'FINISHED'}
+
+
+class ANIMESTUDIO_PT_variants(bpy.types.Panel):
+    bl_label = "Mod Variants"
+    bl_idname = "ANIMESTUDIO_PT_variants"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "AnimeStudio"
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+        if obj is None:
+            layout.label(text="Select a part of the character")
+            return
+
+        objects = _character_objects(obj)
+        owner = _variant_owner(objects, obj)
+        layout.prop(owner, "anime_studio_variants", text="")
+        sheet, path, error = _sheet_or_error(owner, objects)
+        if error:
+            layout.label(text=error, icon='ERROR')
+            return
+        if sheet is None:
+            layout.label(text="Pick the .variants.json next to the FBX")
+            return
+
+        layout.label(text=sheet.mod or os.path.basename(path), icon='MODIFIER')
+        values = _variant_values(owner, sheet)
+        set_variant = ANIMESTUDIO_OT_variant_set.bl_idname
+        for name, options, _ in sheet.variables:
+            split = layout.split(factor=0.3, align=True)
+            split.label(text=name.lstrip("$"))
+            row = split.row(align=True)
+            for option in options:
+                op = row.operator(set_variant, text=option,
+                                  depress=values is not None and values[name] == option)
+                op.variable = name
+                op.value = option
+        row = layout.row(align=True)
+        row.operator(set_variant, text="Defaults", icon='LOOP_BACK')
+        row.operator(set_variant, text="Show All", icon='HIDE_OFF').show_all = True
+
+
 class ANIMESTUDIO_PT_takes(bpy.types.Panel):
     bl_label = "Takes"
     bl_idname = "ANIMESTUDIO_PT_takes"
@@ -1581,7 +1838,8 @@ class ANIMESTUDIO_PT_takes(bpy.types.Panel):
 
 _classes = (ANIMESTUDIO_OT_apply_take, ANIMESTUDIO_OT_combine, ANIMESTUDIO_OT_push_nla,
             ANIMESTUDIO_OT_root_motion, ANIMESTUDIO_OT_report, ANIMESTUDIO_OT_combo_input,
-            ANIMESTUDIO_OT_combo_edit, ANIMESTUDIO_OT_combo_build, ANIMESTUDIO_PT_takes)
+            ANIMESTUDIO_OT_combo_edit, ANIMESTUDIO_OT_combo_build, ANIMESTUDIO_PT_takes,
+            ANIMESTUDIO_OT_variant_set, ANIMESTUDIO_PT_variants)
 
 
 def register():
@@ -1654,9 +1912,18 @@ def register():
                      "every new clip. Only the ground is carried, jumps still land"),
         default=True,
     )
+    bpy.types.Object.anime_studio_variants = StringProperty(
+        name="Mod variants",
+        description=("The .variants.json AnimeStudio writes next to an FBX exported with "
+                     "every variant of a 3DMigoto mod as its own mesh"),
+        subtype='FILE_PATH',
+    )
+    bpy.types.Object.anime_studio_variant_values = StringProperty(options={'HIDDEN'})
 
 
 def unregister():
+    del bpy.types.Object.anime_studio_variant_values
+    del bpy.types.Object.anime_studio_variants
     del bpy.types.Scene.anime_studio_combo_carry
     del bpy.types.Scene.anime_studio_combo_all
     del bpy.types.Scene.anime_studio_combo_settle
@@ -1673,6 +1940,8 @@ def unregister():
     _enum_cache.clear()
     _layer_cache.clear()
     _graphs.clear()
+    _sheets.clear()
+    _sheet_guesses.clear()
 
 
 if __name__ == "__main__":

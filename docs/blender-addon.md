@@ -60,6 +60,18 @@ If the combo needs a clip that isn't in the imported FBX, or one that wasn't loa
 
 Blender before 5.0 cuts clip names at 63 characters, so clips of one character can't be told apart reliably. That's why combos need 5.0.
 
+## Mod variants
+
+For a character exported with a 3DMigoto mod and "Export every variant as its own mesh" ticked (see [mod meshes](migoto-mesh-replacement.md#all-variants-in-one-export)). The panel "Mod Variants" shows the mod's toggles, the same ones its keys switch in the game.
+
+1. Import the FBX and click a part of the character.
+2. The panel finds the `.variants.json` next to the FBX on its own. If it doesn't, pick it in the field at the top.
+3. Click a value. The meshes of that value show up, the others are hidden, and textures that depend on it are swapped.
+
+Defaults goes back to what the mod starts with. Show All shows every variant mesh again.
+
+Keep the images that were exported next to the FBX where they are. Textures of other values are loaded from that folder when you switch.
+
 ## Other scripts
 
 `tools/blender` also has two scripts you can run from Blender's Text Editor without the add-on:

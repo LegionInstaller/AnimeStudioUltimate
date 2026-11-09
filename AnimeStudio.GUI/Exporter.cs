@@ -588,6 +588,7 @@ namespace AnimeStudio.GUI
             ModelExporter.ExportFbx(exportPath, convert, exportOptions);
             // A replaced mesh without the mod's own textures exports as a grey shape.
             MigotoSwap.CopyTextures(Path.GetDirectoryName(exportPath));
+            MigotoSwap.WriteVariants(exportPath, convert);
         }
 
         public static bool ExportDumpFile(AssetItem item, string exportPath)

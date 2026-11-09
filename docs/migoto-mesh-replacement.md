@@ -10,10 +10,18 @@ It only reads the mod folder. Nothing is written to the mod and nothing touches 
 2. Open Export > Replace meshes from a 3DMigoto mod...
 3. Click Browse... and pick the mod folder. If the mod is split into several folders, pick the folder above them.
 4. Check the table. Each row is a part of the mod, and "Replaces" shows which part of the character it goes on. Fix wrong or empty rows. Set a row to "(do not replace)" to skip it.
-5. If the mod has outfit toggles, pick them in the Variants list.
+5. If the mod has outfit toggles, pick them in the Variants list. Or tick "Export every variant as its own mesh" to get all of them in one export.
 6. Click Apply and export as usual.
 
 You can leave the window open. Export, check the result, change something, Apply again, export again. Clear turns it off.
+
+## All variants in one export
+
+With "Export every variant as its own mesh" ticked you don't have to decide on the toggles first. Every piece that depends on a toggle becomes its own mesh, named after the part and the value that shows it, like `Body.Garter=1`. Pieces that are always there stay on the part itself. In Blender the meshes sit next to their part, so you just hide the ones you don't want.
+
+If several values show the very same piece, you get it once. Toggles that only change a texture don't make a mesh, the export starts with the value from the Variants list.
+
+Next to the FBX you also get a `<name>.variants.json`. It says which mesh and which texture belongs to which value of the mod's toggles. With it the [Blender add-on](blender-addon.md#mod-variants) gives you the toggles as buttons, so you don't have to hide meshes by hand.
 
 The mod's texture files are copied next to the exported FBX.
 

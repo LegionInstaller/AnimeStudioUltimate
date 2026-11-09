@@ -41,5 +41,12 @@ namespace AnimeStudio
         /// <summary>The converter's texture list. Anything a new material names goes here,
         /// because that is where the writer looks the name up.</summary>
         public List<ImportedTexture> Textures { get; set; }
+
+        /// <summary>
+        /// Hangs a further mesh under the renderer being replaced, on a child node of the
+        /// given name. A replacement that comes apart into several pieces -- one per variant
+        /// of a mod -- hands the extra ones over here. The converter fills in the path.
+        /// </summary>
+        public Action<string, ImportedMesh> AddChild { get; set; }
     }
 }

@@ -268,6 +268,21 @@ namespace AnimeStudio
             }
         }
 
+        /// <summary>
+        /// Puts a mesh on a new node under a renderer's own. The node sits exactly on its
+        /// parent, so the mesh lands where the renderer's would.
+        /// </summary>
+        private void AddChildMesh(Renderer meshR, string name, ImportedMesh extra)
+        {
+            if (!meshR.m_GameObject.TryGet(out var m_GameObject) || m_GameObject.m_Transform == null
+                || !transformDictionary.TryGetValue(m_GameObject.m_Transform, out var parent))
+                return;
+            var frame = CreateFrame(name, Vector3.Zero, new Quaternion(0, 0, 0, 1), Vector3.One);
+            parent.AddChild(frame);
+            extra.Path = frame.Path;
+            MeshList.Add(extra);
+        }
+
         private void ConvertMeshRenderer(Renderer meshR)
         {
             var mesh = GetMesh(meshR);
@@ -286,10 +301,13 @@ namespace AnimeStudio
                 MaterialOf = index => ConvertMaterial(MaterialAt(meshR, index)).Name,
                 Materials = MaterialList,
                 Textures = TextureList,
+                AddChild = (name, extra) => AddChildMesh(meshR, name, extra),
             });
             if (replacement != null)
             {
-                MeshList.Add(replacement);
+                // A replacement made only of child pieces leaves the renderer's own node empty.
+                if (replacement.SubmeshList.Count > 0)
+                    MeshList.Add(replacement);
                 return;
             }
 

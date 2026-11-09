@@ -25,6 +25,7 @@ namespace AnimeStudio.GUI
         private readonly DataGridView grid = new DataGridView();
         private readonly DataGridView variables = new DataGridView();
         private readonly Label summary = new Label();
+        private readonly CheckBox split = new CheckBox();
         private readonly Button apply = new Button();
         private readonly Button clear = new Button();
         private readonly Button close = new Button();
@@ -84,6 +85,12 @@ namespace AnimeStudio.GUI
             summary.SetBounds(324, 374, 516, 80);
             summary.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
+            // Off by default: unticked, an export is exactly what it was before the box existed.
+            split.SetBounds(12, 470, 300, 22);
+            split.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            split.Text = "Export every variant as its own mesh";
+            split.Checked = MigotoSwap.Split;
+
             apply.SetBounds(560, 466, 90, 28);
             clear.SetBounds(656, 466, 90, 28);
             close.SetBounds(752, 466, 88, 28);
@@ -99,7 +106,7 @@ namespace AnimeStudio.GUI
             Controls.AddRange(new Control[]
             {
                 folderLabel, folderBox, browse, grid, switchLabel, variables, summary,
-                apply, clear, close,
+                split, apply, clear, close,
             });
             Describe();
             // The window can be reopened after a close, and choosing the same folder again
@@ -335,10 +342,11 @@ namespace AnimeStudio.GUI
             };
             foreach (DataGridViewRow row in variables.Rows)
                 values[(string)row.Cells[0].Value] = row.Cells[1].Value as string ?? "0";
-            MigotoSwap.Arm(mod, mapping, painted, values);
+            MigotoSwap.Arm(mod, mapping, painted, values, split.Checked);
             Logger.Info($"Mesh replacement armed: {mapping.Count} part(s)"
                         + (painted.Count > 0 ? $" and {painted.Count} texture swap(s)" : "")
-                        + $" from {Path.GetFileName(mod.Folder)}. "
+                        + $" from {Path.GetFileName(mod.Folder)}"
+                        + (split.Checked ? ", every variant as its own mesh" : "") + ". "
                         + "The next model export uses them.");
             Describe();
         }
@@ -354,6 +362,10 @@ namespace AnimeStudio.GUI
             lines.Add(MigotoSwap.IsArmed
                 ? $"Armed: {Path.GetFileName(MigotoSwap.Folder)}. The next model export "
                   + "replaces the assigned meshes."
+                  + (MigotoSwap.Split
+                      ? " Every variant becomes a mesh of its own under the part it belongs to; "
+                        + "the values on the left only pick the textures."
+                      : "")
                 : "Nothing armed -- exports are unaffected.");
             var seen = warnings.Distinct().ToList();
             if (seen.Count > 0)

@@ -169,10 +169,14 @@ namespace AnimeStudio.Migoto
         /// Whether a bone carries no weight anyone needs: every vertex that names it is
         /// already fully weighted without it.
         ///
-        /// Mods do this. The Pulchra outfit mod puts a full extra influence on bone 184 over
+        /// Mods do this. The Pulchra cowgirl mod puts a full extra influence on bone 184 over
         /// 23297 vertices whose other weights already sum to exactly 1 -- and the shipped
         /// <c>Pulchra_Body</c> has 184 bones, so 0..183. Counting the phantom left only the
         /// LOD avatars as candidates and hid the right target by exactly one bone.
+        ///
+        /// The other way to get there is a slip while painting: a Jane Doe mod leaves 30
+        /// vertices of a jacket with one to six percent on bone 114 of a renderer that has
+        /// 61. A tenth of a vertex is the most that may hang on such a bone.
         /// </summary>
         private static bool Redundant(MigotoVertex[] vertices, int bone)
         {
@@ -187,7 +191,7 @@ namespace AnimeStudio.Migoto
                     if (w <= 0 || b != bone)
                         continue;
                     seen = true;
-                    if (sum - w < 0.99f)
+                    if (sum - w < 0.9f)
                         return false;       // the rest of this vertex needs it
                 }
             }
@@ -429,6 +433,8 @@ namespace AnimeStudio.Migoto
                 part.VertexCount = DeclaredVertexCount(ini, stem);
                 if (part.VertexCount <= 0)
                     part.VertexCount = FromFileSize(part, stem);
+                else
+                    TrimToFile(part, stem);
                 Parts.Add(part);
             }
             Parts.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
@@ -481,6 +487,23 @@ namespace AnimeStudio.Migoto
             Warnings.Add($"{stem}: no override_vertex_count in the ini, took {count} from "
                          + "the file size");
             return count;
+        }
+
+        /// <summary>
+        /// A mod edited by hand can declare more vertices than its buffer holds. The game
+        /// never reads the missing ones, so nobody notices; here the file decides, or the
+        /// whole part would be refused for a number nothing depends on.
+        /// </summary>
+        private void TrimToFile(MigotoPart part, string stem)
+        {
+            if (part.PositionStride <= 0 || !File.Exists(part.PositionFile))
+                return;
+            var held = (int)(new FileInfo(part.PositionFile).Length / part.PositionStride);
+            if (held <= 0 || held >= part.VertexCount)
+                return;
+            Warnings.Add($"{stem}: the ini declares {part.VertexCount} vertices, the buffer "
+                         + $"holds {held} -- took {held}");
+            part.VertexCount = held;
         }
 
         /// <summary>
@@ -733,7 +756,7 @@ namespace AnimeStudio.Migoto
         {
             void Note(IEnumerable<IniCondition> conditions)
             {
-                foreach (var c in conditions)
+                foreach (var c in conditions.SelectMany(o => o.Terms))
                 {
                     if (c.Variable == null || DrawVariables.ContainsKey(c.Variable))
                         continue;

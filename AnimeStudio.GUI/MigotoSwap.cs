@@ -29,6 +29,8 @@ namespace AnimeStudio.GUI
             public Dictionary<string, MigotoPart> ByRenderer;
             public Dictionary<string, MigotoTextureSet> PaintedRenderer;
             public Dictionary<string, string> Chosen;
+            public bool Split;
+            public VariantSheet Sheet;      // only with Split: what the switches need to know
         }
 
         private static volatile Armed armed;
@@ -46,9 +48,12 @@ namespace AnimeStudio.GUI
         /// <summary>Warnings collected while reading and building, for the log.</summary>
         public static List<string> Warnings { get; } = new List<string>();
 
+        /// <summary>Whether the armed replacement exports every variant as a mesh of its own.</summary>
+        public static bool Split => armed?.Split ?? false;
+
         public static void Arm(MigotoMod loaded, Dictionary<string, MigotoPart> mapping,
                                Dictionary<string, MigotoTextureSet> painted,
-                               Dictionary<string, string> variableValues)
+                               Dictionary<string, string> variableValues, bool split = false)
         {
             armed = new Armed
             {
@@ -58,6 +63,8 @@ namespace AnimeStudio.GUI
                                   ?? new Dictionary<string, MigotoTextureSet>(StringComparer.Ordinal),
                 Chosen = variableValues
                          ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Split = split,
+                Sheet = split ? new VariantSheet() : null,
             };
             ClearLog();
         }
@@ -113,7 +120,8 @@ namespace AnimeStudio.GUI
                 return null;
 
             var warnings = new List<string>();
-            var name = MeshBuilder.Material(set.Name, set.Textures, context, warnings, state.Chosen);
+            var name = MeshBuilder.Material(set.Name, set.Textures, context, warnings, state.Chosen,
+                                            state.Sheet);
             foreach (var w in warnings)
                 Logger.Warning($"Mesh replacement: {w}");
             if (name == null)
@@ -144,16 +152,31 @@ namespace AnimeStudio.GUI
             if (!state.ByRenderer.TryGetValue(go.m_Name, out var part))
                 return null;
 
+            // The variants pass through here on their way to the converter, to be counted.
+            var variants = new List<string>();
+            var add = context.AddChild;
+            if (state.Split && add != null)
+                context.AddChild = (name, variant) =>
+                {
+                    variants.Add($"{name} ({variant.VertexList.Count} vertices, "
+                                 + $"{variant.SubmeshList.Sum(s => s.FaceList.Count)} triangles)");
+                    add(name, variant);
+                };
+
             var warnings = new List<string>();
-            var mesh = MeshBuilder.Build(part, context, warnings, state.Chosen);
+            var mesh = MeshBuilder.Build(part, context, warnings, state.Chosen, state.Split,
+                                         state.Sheet);
             foreach (var w in warnings)
                 Logger.Warning($"Mesh replacement: {w}");
 
             var line = mesh == null ? null
                 : $"{go.m_Name} <- {part.Name} ({mesh.VertexList.Count} vertices, "
-                  + $"{mesh.SubmeshList.Sum(s => s.FaceList.Count)} triangles)";
+                  + $"{mesh.SubmeshList.Sum(s => s.FaceList.Count)} triangles)"
+                  + (variants.Count == 0 ? "" : $", {variants.Count} variant(s) as meshes of their own");
             if (line != null)
                 Logger.Info("Mesh replacement: " + line);
+            foreach (var variant in variants)
+                Logger.Info("Mesh replacement:     " + variant);
 
             lock (log)
             {
@@ -199,6 +222,34 @@ namespace AnimeStudio.GUI
             if (copied > 0)
                 Logger.Info($"Mesh replacement: copied {copied} texture(s) from the mod folder.");
             return copied;
+        }
+
+        /// <summary>
+        /// Writes down, next to a model exported with every variant as its own mesh, which
+        /// mesh and which image belongs to which value of the mod's variables. The Blender
+        /// add-on makes switches of it.
+        /// </summary>
+        public static void WriteVariants(string fbxPath, IImported model)
+        {
+            var state = armed;
+            if (state?.Sheet == null || model == null)
+                return;
+            try
+            {
+                var warnings = new List<string>();
+                var written = state.Sheet.Write(fbxPath, state.Mod, state.Chosen,
+                                                model.MeshList.Select(m => m.Path),
+                                                model.MaterialList.Select(m => m.Name), warnings);
+                foreach (var w in warnings)
+                    Logger.Warning($"Mesh replacement: {w}");
+                if (written != null)
+                    Logger.Info("Mesh replacement: switches for the variants written to "
+                                + System.IO.Path.GetFileName(written));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"Mesh replacement: could not write the variant switches, {ex.Message}");
+            }
         }
 
         /// <summary>How a paint target is written: the renderer, then its material.</summary>

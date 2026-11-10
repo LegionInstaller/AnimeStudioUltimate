@@ -9,7 +9,7 @@
       v1-stable-zzz, v2-facial, v3-stable-pre-perf, v4-perf, v5-export, and the mesh-link
       work that follows them is the sixth.
     -->
-    <UltimateVersion>1.8.0</UltimateVersion>
+    <UltimateVersion>1.8.1</UltimateVersion>
 
     <!--
       Keep the commit hash out of the informational version. The SDK appends "+<sha>" to it by
